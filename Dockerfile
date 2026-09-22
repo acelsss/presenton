@@ -1,11 +1,16 @@
 # syntax=docker/dockerfile:1.7
 
+ARG PRESENTON_EXTERNAL_AGENT=false
+
 FROM python:3.11-slim-trixie AS fastapi-builder
+
+ARG PRESENTON_EXTERNAL_AGENT
 
 WORKDIR /app/servers/fastapi
 
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    PRESENTON_EXTERNAL_AGENT=${PRESENTON_EXTERNAL_AGENT}
 
 RUN python -m venv --without-pip /opt/venv \
     && pip install --no-cache-dir uv
@@ -18,11 +23,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY servers/fastapi /app/servers/fastapi
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/venv/bin/python --no-deps .
-# mem0/spaCy BM25 lemmatization loads en_core_web_sm at runtime; spaCy tries pip to
-# download it otherwise. Runtime image has no pip in PATH (--without-pip venv).
+# Native Mem0 uses spaCy; external-agent builds do not need its language model.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --python /opt/venv/bin/python \
-    "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+    case "$(printf '%s' "$PRESENTON_EXTERNAL_AGENT" | tr '[:upper:]' '[:lower:]')" in \
+      1|true) ;; \
+      *) uv pip install --python /opt/venv/bin/python \
+        "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" ;; \
+    esac
 ENV HF_HOME=/root/.cache/huggingface \
     PRESENTON_FASTEMBED_ICON_CACHE_DIR=/root/.cache/presenton/fastembed-icons
 # Warm FastEmbed caches into the image (not a BuildKit cache mount, or HF weights would be missing).
@@ -62,11 +69,14 @@ RUN mkdir -p /app/document-extraction-liteparse \
 COPY electron/resources/document-extraction/liteparse_runner.mjs /app/document-extraction-liteparse/liteparse_runner.mjs
 COPY scripts/sync-presentation-export.cjs /app/scripts/sync-presentation-export.cjs
 COPY scripts/run-presentation-export.mjs /app/scripts/run-presentation-export.mjs
+COPY scripts/snapshot-export.mjs /app/scripts/snapshot-export.mjs
 RUN rm -rf /app/presentation-export \
     && node /app/scripts/sync-presentation-export.cjs --force
 
 
 FROM python:3.11-slim-trixie AS runtime
+
+ARG PRESENTON_EXTERNAL_AGENT
 
 WORKDIR /app
 
@@ -76,6 +86,7 @@ ARG CHROMIUM_SNAPSHOT=20260625T180000Z
 
 # LiteParse uses Node + @llamaindex/liteparse (same runner as Electron); OCR uses Tesseract.
 ENV APP_DATA_DIRECTORY=/app_data \
+    PRESENTON_EXTERNAL_AGENT=${PRESENTON_EXTERNAL_AGENT} \
     TEMP_DIRECTORY=/tmp/presenton \
     EXPORT_PACKAGE_ROOT=/app/presentation-export \
     PRESENTON_APP_ROOT=/app \

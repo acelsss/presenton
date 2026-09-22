@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from services.agent_tools.native_policy import require_native_capability
 
 from api.v1.ppt.endpoints.anthropic import ANTHROPIC_ROUTER
 from api.v1.ppt.endpoints.chat import CHAT_ROUTER
@@ -21,7 +22,7 @@ from api.v1.ppt.endpoints.theme import THEMES_ROUTER
 from api.v1.ppt.endpoints.theme_generate import THEME_ROUTER
 
 
-API_V1_PPT_ROUTER = APIRouter(prefix="/api/v1/ppt")
+API_V1_PPT_ROUTER = APIRouter(prefix="/api/v1/ppt", dependencies=[Depends(require_native_capability)])
 
 API_V1_PPT_ROUTER.include_router(FILES_ROUTER)
 API_V1_PPT_ROUTER.include_router(FONTS_ROUTER)

@@ -1874,11 +1874,11 @@ def _normalize_infographic_data_keys(value: Any) -> Any:
     }
 
 
-def _update_text_element(element: dict[str, Any], text: str) -> None:
+def _update_text_element(element: dict[str, Any], text: str, *, enforce_lengths: bool = True) -> None:
     _validate_text_length(
         text,
-        min_length=element.get("min_length"),
-        max_length=element.get("max_length"),
+        min_length=element.get("min_length") if enforce_lengths else None,
+        max_length=element.get("max_length") if enforce_lengths else None,
         label=str(element.get("name") or "text"),
     )
     element["runs"] = _replacement_runs(
@@ -1893,7 +1893,7 @@ def _update_text_element(element: dict[str, Any], text: str) -> None:
         element["text"] = text
 
 
-def _update_text_list_element(element: dict[str, Any], items: list[str]) -> None:
+def _update_text_list_element(element: dict[str, Any], items: list[str], *, enforce_lengths: bool = True) -> None:
     min_items = _int_or_none(element.get("min_items"))
     max_items = _int_or_none(element.get("max_items"))
     if min_items is not None and len(items) < min_items:
@@ -1904,8 +1904,8 @@ def _update_text_list_element(element: dict[str, Any], items: list[str]) -> None
     for index, item in enumerate(items):
         _validate_text_length(
             item,
-            min_length=element.get("min_item_length"),
-            max_length=element.get("max_item_length"),
+            min_length=element.get("min_item_length") if enforce_lengths else None,
+            max_length=element.get("max_item_length") if enforce_lengths else None,
             label=f"list item {index + 1}",
         )
 

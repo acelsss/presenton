@@ -9,6 +9,12 @@ import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 
 export interface PresentationData {
   id: string;
+  coordination?: {
+    revision: number;
+    previousRevision?: number | null;
+    pageRevisions: Record<string, number>;
+    writable: boolean;
+  } | null;
 
   language: string;
   layout: any;

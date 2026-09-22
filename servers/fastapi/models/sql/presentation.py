@@ -47,6 +47,8 @@ class PresentationModel(SQLModel, table=True):
     n_slides: int
     language: str
     title: Optional[str] = None
+    # Managed manuscripts are only writable through the revision/lease coordinator.
+    agent_managed: bool = Field(default=False, nullable=False, index=True)
     file_paths: Optional[List[str]] = Field(sa_column=Column(JSON), default=None)
     outlines: Optional[dict] = Field(sa_column=Column(JSON), default=None)
     created_at: datetime = Field(

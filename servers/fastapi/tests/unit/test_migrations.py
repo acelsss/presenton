@@ -294,6 +294,7 @@ def test_async_task_status_migration_maps_processing_to_pending(tmp_path):
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
+            connection.execute(text("CREATE TABLE presentations (id TEXT PRIMARY KEY)"))
             connection.execute(
                 text(
                     """
@@ -506,6 +507,7 @@ def test_upgrade_from_template_v2_revision_adds_slide_ui(tmp_path):
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
+            connection.execute(text("CREATE TABLE presentations (id TEXT PRIMARY KEY)"))
             connection.execute(text("CREATE TABLE slides (id TEXT PRIMARY KEY)"))
             connection.execute(
                 text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
@@ -541,6 +543,7 @@ def test_upgrade_from_font_uploads_revision_converts_template_v2_ids_to_strings(
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
+            connection.execute(text("CREATE TABLE presentations (id TEXT PRIMARY KEY)"))
             connection.execute(
                 text(
                     """
@@ -825,17 +828,7 @@ def test_upgrade_from_previous_head_adds_template_v2_theme(tmp_path):
     database_url = f"sqlite:///{tmp_path / 'template-v2-theme.db'}"
     engine = create_engine(database_url)
     try:
-        with engine.begin() as connection:
-            connection.execute(
-                text("CREATE TABLE template_v2 (id VARCHAR PRIMARY KEY)")
-            )
-            connection.execute(
-                text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
-            )
-            connection.execute(
-                text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
-                {"revision": migrations.REVISION_SMART_MODE_BACKFILL},
-            )
+        command.upgrade(_alembic_config(database_url), migrations.REVISION_SMART_MODE_BACKFILL)
 
         command.upgrade(_alembic_config(database_url), "head")
 

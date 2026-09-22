@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     AsyncSession,
 )
-from sqlalchemy import event, or_
+from sqlalchemy import event, or_, select
 from sqlalchemy.orm import Session, with_loader_criteria
 from sqlmodel import SQLModel
 
@@ -16,6 +16,8 @@ from models.sql.async_presentation_generation_status import (
 from models.sql.chat_history_message import ChatHistoryMessageModel
 from models.sql.font_upload import FontUpload
 from models.sql.api_key import ApiKey
+from models.sql.agent_document import AgentCallerSession, AgentDocument, AgentOperationReceipt
+from models.sql.ppt_workflow import PptWorkflowRef
 from models.sql.image_asset import ImageAsset
 from models.sql.key_value import KeyValueSqlModel
 from models.sql.ollama_pull_status import OllamaPullStatus
@@ -57,6 +59,10 @@ async_session_maker = async_sessionmaker(sql_engine, expire_on_commit=False)
 
 
 _STRICT_OWNER_MODELS = (
+    PptWorkflowRef,
+    AgentCallerSession,
+    AgentDocument,
+    AgentOperationReceipt,
     PresentationModel,
     SlideModel,
     PresentationLayoutCodeModel,
@@ -72,16 +78,31 @@ _STRICT_OWNER_MODELS = (
 
 @event.listens_for(Session, "do_orm_execute")
 def _scope_owned_selects(execute_state) -> None:
-    """Apply tenant criteria to every ORM SELECT performed during a request."""
+    """Apply ownership and managed-document criteria to ORM reads and bulk writes."""
     owner_id = get_current_owner_id()
-    if (
-        owner_id is None
-        or not execute_state.is_select
-        or execute_state.execution_options.get("skip_owner_scope")
-    ):
+    if not (execute_state.is_select or execute_state.is_update or execute_state.is_delete):
         return
 
     statement = execute_state.statement
+    if not execute_state.is_select and not execute_state.session.info.get("agent_tools"):
+        # Reads retain normal owner visibility. Unadapted bulk writes cannot bypass
+        # revision checks; native editor saves and MCP use the same coordinator.
+        managed_ids = select(PresentationModel.__table__.c.id).where(
+            PresentationModel.__table__.c.agent_managed.is_(True)
+        )
+        statement = statement.options(
+            with_loader_criteria(
+                PresentationModel, PresentationModel.agent_managed.is_(False),
+                include_aliases=True,
+            ),
+            with_loader_criteria(
+                SlideModel, SlideModel.presentation.not_in(managed_ids),
+                include_aliases=True,
+            ),
+        )
+    if owner_id is None or execute_state.execution_options.get("skip_owner_scope"):
+        execute_state.statement = statement
+        return
     for model in _STRICT_OWNER_MODELS:
         statement = statement.options(
             with_loader_criteria(
@@ -105,7 +126,25 @@ def _scope_owned_selects(execute_state) -> None:
 
 @event.listens_for(Session, "before_flush")
 def _stamp_new_owned_rows(session, _flush_context, _instances) -> None:
-    owner_id = get_current_owner_id()
+    if not session.info.get("agent_tools"):
+        candidates = list(session.new) + list(session.dirty) + list(session.deleted)
+        ids = {row.presentation for row in candidates if isinstance(row, SlideModel)}
+        ids.update(row.id for row in candidates if isinstance(row, PresentationModel))
+        explicitly_managed = any(
+            isinstance(row, PresentationModel) and row.agent_managed
+            for row in candidates
+        )
+        stored_managed = ids and session.connection().scalar(
+            select(PresentationModel.__table__.c.id).where(
+                PresentationModel.__table__.c.id.in_(ids),
+                PresentationModel.__table__.c.agent_managed.is_(True),
+            ).limit(1)
+        )
+        if explicitly_managed or stored_managed:
+            from fastapi import HTTPException
+
+            raise HTTPException(409, {"code": "managed_document_requires_coordinator"})
+    owner_id = session.info.get("agent_owner_id") or get_current_owner_id()
     if owner_id is None:
         return
     owner_models = _STRICT_OWNER_MODELS + (TemplateV2,)
@@ -129,6 +168,10 @@ async def create_db_and_tables():
                     sync_conn,
                     tables=[
                         PresentationModel.__table__,
+                        AgentCallerSession.__table__,
+                        AgentDocument.__table__,
+                        AgentOperationReceipt.__table__,
+                        PptWorkflowRef.__table__,
                         SlideModel.__table__,
                         KeyValueSqlModel.__table__,
                         TemplateV2.__table__,

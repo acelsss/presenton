@@ -1,0 +1,26 @@
+# Use with docker-compose.yml and choose one service, e.g. production.
+x-external-agent-environment: &external-agent-environment
+  PRESENTON_EXTERNAL_AGENT: "true"
+  DISABLE_AUTH: "false"
+  MEM0_ENABLED: "false"
+  START_OLLAMA: "false"
+  DISABLE_IMAGE_GENERATION: "true"
+  CAN_CHANGE_KEYS: "false"
+
+x-external-agent-build: &external-agent-build
+  args:
+    PRESENTON_EXTERNAL_AGENT: "true"
+
+services:
+  production:
+    build: *external-agent-build
+    environment: *external-agent-environment
+  production-gpu:
+    build: *external-agent-build
+    environment: *external-agent-environment
+  development:
+    build: *external-agent-build
+    environment: *external-agent-environment
+  development-gpu:
+    build: *external-agent-build
+    environment: *external-agent-environment

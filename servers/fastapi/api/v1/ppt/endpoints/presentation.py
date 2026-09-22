@@ -17,6 +17,7 @@ from fastapi import (
     Path,
     Query,
     Request,
+    Response,
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -1521,6 +1522,12 @@ async def get_presentation(
     presentation = await sql_session.get(PresentationModel, id)
     if not presentation:
         raise HTTPException(404, "Presentation not found")
+    if presentation.agent_managed:
+        from services.agent_tools.editor import editor_service
+        presentation, slides, coordination = await editor_service(
+            sql_session, presentation).read_editor(id)
+        return PresentationWithSlides(
+            **_presentation_response_data(presentation), slides=slides, coordination=coordination)
     slides_result = await sql_session.scalars(
         select(SlideModel)
         .where(SlideModel.presentation == id)
@@ -2454,11 +2461,26 @@ async def update_presentation(
     title: Annotated[Optional[str], Body()] = None,
     theme: Annotated[Optional[dict], Body()] = None,
     slides: Annotated[Optional[List[SlideModel]], Body()] = None,
+    expected_revision: Annotated[Optional[int], Body(alias="expectedRevision", ge=0)] = None,
+    expected_pages: Annotated[Optional[dict[str, int]], Body(alias="expectedPageRevisions")] = None,
+    request_http: Request = None,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
     presentation = await sql_session.get(PresentationModel, id)
     if not presentation:
         raise HTTPException(status_code=404, detail="Presentation not found")
+
+    if presentation.agent_managed:
+        from services.agent_tools.editor import editor_service
+        supplied = await request_http.json() if request_http else {"title": title, "theme": theme}
+        metadata = {key: value for key, value in {"title": title, "theme": theme}.items() if key in supplied}
+        if n_slides is not None and (slides is None or n_slides != len(slides)):
+            raise HTTPException(422, {"code": "slide_count_requires_matching_slides"})
+        presentation, saved, coordination = await editor_service(sql_session, presentation).save_editor(
+            id, slides=slides, metadata=metadata, expected_revision=expected_revision,
+            expected_pages=expected_pages)
+        return PresentationWithSlides(
+            **_presentation_response_data(presentation), slides=saved, coordination=coordination)
 
     presentation_update_dict = {}
     if n_slides is not None:
@@ -2511,6 +2533,8 @@ async def update_presentation(
 @PRESENTATION_ROUTER.patch("/slide_update", response_model=SlideModel)
 async def update_presentation_slide(
     slide: Annotated[SlideModel, Body(embed=True)],
+    expected_page_revision: Annotated[Optional[int], Body(alias="expectedPageRevision", ge=0)] = None,
+    response: Response = None,
     sql_session: AsyncSession = Depends(get_async_session),
 ):
     try:
@@ -2531,6 +2555,15 @@ async def update_presentation_slide(
             status_code=400,
             detail="Slide does not belong to the supplied presentation",
         )
+
+    presentation = await sql_session.get(PresentationModel, presentation_id)
+    if presentation is not None and presentation.agent_managed:
+        from services.agent_tools.editor import editor_service
+        _, saved, coordination = await editor_service(sql_session, presentation).save_editor(
+            presentation_id, slide=slide, expected_page_revision=expected_page_revision)
+        if response is not None:
+            response.headers["X-Presenton-Coordination"] = json.dumps(coordination, separators=(",", ":"))
+        return next(row for row in saved if row.id == slide_id)
 
     stored_slide.sqlmodel_update(
         slide.model_dump(

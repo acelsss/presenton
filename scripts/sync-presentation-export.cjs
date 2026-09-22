@@ -23,6 +23,8 @@ const installedPackageJson = path.join(
   "package.json",
 );
 const sourceRunner = path.join(repoRoot, "scripts", "run-presentation-export.mjs");
+const sourceSnapshotRunner = path.join(repoRoot, "scripts", "snapshot-export.mjs");
+const targetSnapshotRunner = path.join(targetRoot, "snapshot-export.mjs");
 const versionManifestPath = path.join(targetRoot, "presenton-export-version.json");
 const packageJsonFile = path.join(repoRoot, "package.json");
 const cacheDir = path.join(repoRoot, ".cache", "presentation-export");
@@ -211,6 +213,9 @@ function downloadFile(url, outputPath, redirects = 5) {
 }
 
 function validateExistingRuntime(expectedVersion) {
+  if (!fs.existsSync(targetSnapshotRunner)) {
+    return { ok: false, reason: `Missing snapshot renderer: ${targetSnapshotRunner}` };
+  }
   if (!fs.existsSync(targetRunner)) {
     return { ok: false, reason: `Missing export runner: ${targetRunner}` };
   }
@@ -257,6 +262,7 @@ function installRuntime(version, archivePath) {
   // Removing a mount point fails with EBUSY; clearing its contents is portable.
   clearDirectoryContents(targetRoot);
   fs.copyFileSync(sourceRunner, targetRunner);
+  fs.copyFileSync(sourceSnapshotRunner, targetSnapshotRunner);
   fs.writeFileSync(
     path.join(targetRoot, "package.json"),
     `${JSON.stringify(
@@ -296,6 +302,11 @@ function installRuntime(version, archivePath) {
 
 async function main() {
   const version = await getTargetVersion();
+  if (!checkOnly && fs.existsSync(targetRunner)) {
+    // Local adapter changes do not require reinstalling the pinned renderer.
+    fs.copyFileSync(sourceRunner, targetRunner);
+    fs.copyFileSync(sourceSnapshotRunner, targetSnapshotRunner);
+  }
   const existing = validateExistingRuntime(version);
   if (checkOnly) {
     if (!existing.ok) throw new Error(existing.reason);

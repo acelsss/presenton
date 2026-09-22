@@ -11,6 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from constants.presentation import MAX_NUMBER_OF_SLIDES
+from services.chat.execution_policy import (
+    ChatExecutionPolicy,
+    existing_asset_schema,
+    project_slide_ui,
+    soften_content_lengths,
+)
 from models.image_prompt import ImagePrompt
 from models.presentation_outline_model import PresentationOutlineModel, SlideOutlineModel
 from models.sql.image_asset import ImageAsset
@@ -312,12 +318,28 @@ class PresentationChatMemoryLayer:
         sql_session: AsyncSession,
         presentation_id: uuid.UUID,
         presentation_type: str = "standard",
+        *,
+        execution_policy: ChatExecutionPolicy | None = None,
     ):
         self._sql_session = sql_session
         self._presentation_id = presentation_id
+        self._policy = execution_policy or ChatExecutionPolicy()
         self.presentation_type = (
             "smart" if presentation_type == "smart" else "standard"
         )
+
+    async def _persist(self) -> None:
+        if self._policy.managed_transaction:
+            await self._sql_session.flush()
+        else:
+            await self._sql_session.commit()
+
+    def _content_schema(self, schema: dict[str, Any]) -> dict[str, Any]:
+        if self._policy.soft_text_lengths:
+            schema = soften_content_lengths(schema)
+        if not self._policy.allow_generation:
+            schema = existing_asset_schema(schema)
+        return schema
 
     async def get(self, key: str) -> Any:
         if key != "presentation_outline":
@@ -361,7 +383,10 @@ class PresentationChatMemoryLayer:
                         "slide_id": str(slide.id),
                         "index": slide.index,
                         "layout_id": slide.layout,
-                        "content": slide.content,
+                        "content": (
+                            project_slide_ui(slide.ui)
+                            if self._policy.current_ui_reads else slide.content
+                        ),
                         "speaker_note": slide.speaker_note,
                     }
                     for slide in slides
@@ -488,7 +513,9 @@ class PresentationChatMemoryLayer:
             return response
         ui = self._slide_ui_layout(slide)
         if include_full_content:
-            response["content"] = slide.content
+            response["content"] = (
+                project_slide_ui(ui) if self._policy.current_ui_reads else slide.content
+            )
             response["ui"] = ui if ui is not None else slide.ui
         if ui is not None:
             response["ui_summary"] = await self.get_slide_ui_elements(
@@ -834,7 +861,7 @@ class PresentationChatMemoryLayer:
         fallback_context = await MEM0_PRESENTATION_MEMORY_SERVICE.retrieve_context(
             self._presentation_id,
             fallback_query,
-        )
+        ) if self._policy.use_memory else ""
         if fallback_context.strip():
             return {
                 "found": True,
@@ -886,7 +913,7 @@ class PresentationChatMemoryLayer:
         layout = await self._get_layout_by_id(layout_id)
         if not layout:
             return None
-        return layout.json_schema
+        return self._content_schema(layout.json_schema)
 
     async def _get_presentation_icon_weight(
         self, presentation: PresentationModel | None = None
@@ -899,17 +926,21 @@ class PresentationChatMemoryLayer:
         return layout_model.icon_weight if layout_model else DEFAULT_ICON_WEIGHT
 
     async def generate_image(self, prompt: str) -> str:
+        if not self._policy.allow_generation:
+            raise ValueError("Existing image assets are required; generation is disabled.")
         image_generation_service = ImageGenerationService(get_images_directory())
         image = await image_generation_service.generate_image(ImagePrompt(prompt=prompt))
 
         if isinstance(image, ImageAsset):
             self._sql_session.add(image)
-            await self._sql_session.commit()
+            await self._persist()
             return filesystem_image_path_to_app_data_url(image.path)
 
         return normalize_slide_asset_url(str(image))
 
     async def generate_icon(self, query: str) -> str:
+        if not self._policy.allow_generation:
+            raise ValueError("Existing icon assets are required; generation is disabled.")
         icons = await ICON_FINDER_SERVICE.search_icons(
             query,
             k=1,
@@ -962,7 +993,7 @@ class PresentationChatMemoryLayer:
             ui=self._blank_slide_ui(),
         )
         self._sql_session.add(new_slide)
-        await self._sql_session.commit()
+        await self._persist()
         await self._sql_session.refresh(new_slide)
         return {
             "added": True,
@@ -1009,9 +1040,10 @@ class PresentationChatMemoryLayer:
                 "validation_errors": validation_errors,
             }
 
-        target_index = max(0, index)
-        image_generation_service = ImageGenerationService(get_images_directory())
+        if self._policy.validate_assets:
+            await self._policy.validate_assets(content)
 
+        target_index = max(0, index)
         if replace_old_slide_at_index:
             existing_slide = await self._sql_session.scalar(
                 select(SlideModel).where(
@@ -1028,19 +1060,21 @@ class PresentationChatMemoryLayer:
 
             updated_content = copy.deepcopy(content)
             image_warnings: list[dict] = []
-            new_assets = await process_old_and_new_slides_and_fetch_assets(
-                image_generation_service=image_generation_service,
-                old_slide_content=existing_slide.content or {},
-                new_slide_content=updated_content,
-                icon_weight=icon_weight,
-                use_template_asset_fields=(
-                    self._is_template_layout_payload(presentation.layout)
-                    or isinstance(existing_slide.ui, dict)
-                    or existing_slide.layout_group.startswith(CUSTOM_TEMPLATE_PREFIX)
-                ),
-                allow_image_fallback=True,
-                image_warnings=image_warnings,
-            )
+            new_assets = []
+            if self._policy.allow_generation:
+                new_assets = await process_old_and_new_slides_and_fetch_assets(
+                    image_generation_service=ImageGenerationService(get_images_directory()),
+                    old_slide_content=existing_slide.content or {},
+                    new_slide_content=updated_content,
+                    icon_weight=icon_weight,
+                    use_template_asset_fields=(
+                        self._is_template_layout_payload(presentation.layout)
+                        or isinstance(existing_slide.ui, dict)
+                        or existing_slide.layout_group.startswith(CUSTOM_TEMPLATE_PREFIX)
+                    ),
+                    allow_image_fallback=True,
+                    image_warnings=image_warnings,
+                )
             for warning in image_warnings:
                 LOGGER.warning(
                     "Chat slide replacement image generation warning: "
@@ -1050,7 +1084,8 @@ class PresentationChatMemoryLayer:
                     warning.get("detail"),
                 )
 
-            existing_slide.id = uuid.uuid4()
+            if not self._policy.preserve_slide_ids:
+                existing_slide.id = uuid.uuid4()
             existing_slide.layout = layout_id
             existing_slide.layout_group = layout_group
             existing_slide.content = updated_content
@@ -1059,17 +1094,21 @@ class PresentationChatMemoryLayer:
                 layout_id=layout_id,
                 content=updated_content,
             )
-            existing_slide.speaker_note = self._extract_speaker_note(updated_content)
+            if self._policy.validate_assets:
+                await self._policy.validate_assets(existing_slide.ui)
+            if not self._policy.preserve_ui_metadata or "__speaker_note__" in updated_content:
+                existing_slide.speaker_note = self._extract_speaker_note(updated_content)
             self._sql_session.add(existing_slide)
             self._sql_session.add_all(new_assets)
-            await self._sql_session.commit()
+            await self._persist()
 
-            await MEM0_PRESENTATION_MEMORY_SERVICE.store_slide_edit(
-                presentation_id=self._presentation_id,
-                slide_index=target_index,
-                edit_prompt=f"[chat_tool_save_slide_replace] layout_id={layout_id}",
-                edited_slide_content=updated_content,
-            )
+            if self._policy.use_memory:
+                await MEM0_PRESENTATION_MEMORY_SERVICE.store_slide_edit(
+                    presentation_id=self._presentation_id,
+                    slide_index=target_index,
+                    edit_prompt=f"[chat_tool_save_slide_replace] layout_id={layout_id}",
+                    edited_slide_content=updated_content,
+                )
 
             return {
                 "saved": True,
@@ -1116,13 +1155,15 @@ class PresentationChatMemoryLayer:
             speaker_note=self._extract_speaker_note(new_slide_content),
         )
         image_warnings: list[dict] = []
-        new_assets = await process_slide_and_fetch_assets(
-            image_generation_service=image_generation_service,
-            slide=new_slide,
-            icon_weight=icon_weight,
-            allow_image_fallback=True,
-            image_warnings=image_warnings,
-        )
+        new_assets = []
+        if self._policy.allow_generation:
+            new_assets = await process_slide_and_fetch_assets(
+                image_generation_service=ImageGenerationService(get_images_directory()),
+                slide=new_slide,
+                icon_weight=icon_weight,
+                allow_image_fallback=True,
+                image_warnings=image_warnings,
+            )
         for warning in image_warnings:
             LOGGER.warning(
                 "Chat slide image generation warning: presentation_id=%s detail=%s",
@@ -1135,17 +1176,20 @@ class PresentationChatMemoryLayer:
             content=new_slide.content,
         )
 
+        if self._policy.validate_assets:
+            await self._policy.validate_assets(new_slide.ui)
         self._sql_session.add(new_slide)
         self._sql_session.add_all(new_assets)
-        await self._sql_session.commit()
+        await self._persist()
         await self._sql_session.refresh(new_slide)
 
-        await MEM0_PRESENTATION_MEMORY_SERVICE.store_slide_edit(
-            presentation_id=self._presentation_id,
-            slide_index=insert_index,
-            edit_prompt=f"[chat_tool_save_slide_new] layout_id={layout_id}",
-            edited_slide_content=new_slide.content,
-        )
+        if self._policy.use_memory:
+            await MEM0_PRESENTATION_MEMORY_SERVICE.store_slide_edit(
+                presentation_id=self._presentation_id,
+                slide_index=insert_index,
+                edit_prompt=f"[chat_tool_save_slide_new] layout_id={layout_id}",
+                edited_slide_content=new_slide.content,
+            )
 
         return {
             "saved": True,
@@ -1273,7 +1317,7 @@ class PresentationChatMemoryLayer:
             if speaker_note is not None:
                 slide.speaker_note = speaker_note
             self._sql_session.add(slide)
-            await self._sql_session.commit()
+            await self._persist()
             return {
                 "saved": True,
                 "action": "replaced",
@@ -1321,7 +1365,7 @@ class PresentationChatMemoryLayer:
         presentation.n_slides = len(slides) + 1
         self._sql_session.add(presentation)
         self._sql_session.add(new_slide)
-        await self._sql_session.commit()
+        await self._persist()
         await self._sql_session.refresh(new_slide)
         return {
             "saved": True,
@@ -1387,7 +1431,7 @@ class PresentationChatMemoryLayer:
                 presentation.n_slides = 1
                 self._sql_session.add(presentation)
             self._sql_session.add(fallback_slide)
-            await self._sql_session.commit()
+            await self._persist()
             await self._sql_session.refresh(fallback_slide)
 
             return {
@@ -1418,7 +1462,7 @@ class PresentationChatMemoryLayer:
             presentation.n_slides = len(remaining_slides)
             self._sql_session.add(presentation)
 
-        await self._sql_session.commit()
+        await self._persist()
 
         return {
             "deleted": True,
@@ -1491,10 +1535,13 @@ class PresentationChatMemoryLayer:
         # Persist the mutated raw layout dict directly. We intentionally avoid
         # round-tripping through pydantic so richer runtime fields on the slide
         # UI (assets, tiptap ids, etc.) are preserved untouched.
-        self._strip_component_sizes(ui)
+        if self._policy.validate_assets:
+            await self._policy.validate_assets(ui)
+        if not self._policy.preserve_ui_metadata:
+            self._strip_component_sizes(ui)
         slide.ui = ui
         self._sql_session.add(slide)
-        await self._sql_session.commit()
+        await self._persist()
         await self._sql_session.refresh(slide)
 
     @staticmethod
@@ -1536,6 +1583,10 @@ class PresentationChatMemoryLayer:
             }
 
         editable = _collect_editable_elements(ui, include_visual_elements=True)
+        if self._policy.current_ui_reads:
+            current = {item["path"]: item["content"] for item in project_slide_ui(ui)}
+            for item in editable:
+                item["content"] = current[item["path"]]
         response: dict[str, Any] = {
             "found": True,
             "editable": True,
@@ -1631,7 +1682,9 @@ class PresentationChatMemoryLayer:
         if content_update_requested and element_type == "text":
             if text is None:
                 raise ValueError("text is required for text elements.")
-            _update_text_element(element, text)
+            _update_text_element(
+                element, text, enforce_lengths=not self._policy.soft_text_lengths
+            )
         elif content_update_requested and element_type == "math":
             if text is None:
                 raise ValueError("text is required for math elements.")
@@ -1654,7 +1707,9 @@ class PresentationChatMemoryLayer:
         elif content_update_requested and element_type == "text-list":
             if items is None:
                 raise ValueError("items is required for text-list elements.")
-            _update_text_list_element(element, items)
+            _update_text_list_element(
+                element, items, enforce_lengths=not self._policy.soft_text_lengths
+            )
         elif content_update_requested and element_type == "table":
             if table is not None:
                 _update_table_element(element, table)
@@ -3088,7 +3143,7 @@ class PresentationChatMemoryLayer:
         previous_theme = copy.deepcopy(current_theme) if current_theme else None
         presentation.theme = copy.deepcopy(selected_theme)
         self._sql_session.add(presentation)
-        await self._sql_session.commit()
+        await self._persist()
 
         selected_name = str(selected_theme.get("name") or "selected theme")
         selected_id = str(selected_theme.get("id") or "")
@@ -3180,6 +3235,8 @@ class PresentationChatMemoryLayer:
         }
 
     async def retrieve_context(self, query: str) -> str:
+        if not self._policy.use_memory:
+            return ""
         context = await MEM0_PRESENTATION_MEMORY_SERVICE.retrieve_context(
             self._presentation_id,
             query,
@@ -4251,7 +4308,7 @@ class PresentationChatMemoryLayer:
         schema: dict[str, Any],
     ) -> list[str]:
         validation_content = self._strip_runtime_fields(content)
-        validator = Draft202012Validator(schema)
+        validator = Draft202012Validator(self._content_schema(schema))
         errors = sorted(validator.iter_errors(validation_content), key=lambda err: err.path)
 
         if not errors:
@@ -4351,12 +4408,13 @@ class PresentationChatMemoryLayer:
         )
 
         self._sql_session.add(presentation)
-        await self._sql_session.commit()
+        await self._persist()
 
-        await MEM0_PRESENTATION_MEMORY_SERVICE.store_generated_outlines(
-            presentation.id,
-            presentation.outlines,
-        )
+        if self._policy.use_memory:
+            await MEM0_PRESENTATION_MEMORY_SERVICE.store_generated_outlines(
+                presentation.id,
+                presentation.outlines,
+            )
 
     @staticmethod
     def _extract_outline_title(markdown_content: str) -> str:
@@ -4370,8 +4428,10 @@ class PresentationChatMemoryLayer:
             return stripped[:120]
         return "Untitled outline"
 
-    @staticmethod
-    def _serialize_slide(slide: SlideModel) -> str:
+    def _serialize_slide(self, slide: SlideModel) -> str:
+        if self._policy.current_ui_reads:
+            content = json.dumps(project_slide_ui(slide.ui), ensure_ascii=False)
+            return f"slide_index={slide.index}\n{content}\n{slide.speaker_note or ''}"
         if slide.html_content:
             return (
                 f"slide_index={slide.index}\nlayout_id={slide.layout}\n"

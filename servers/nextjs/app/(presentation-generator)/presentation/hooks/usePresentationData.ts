@@ -46,7 +46,7 @@ export const usePresentationData = (
       if (normalizedData) {
         const templateId = resolveTemplateIdFromPresentation(normalizedData);
         const responseTheme = normalizeTemplateTheme(normalizedData.theme);
-        const fetchedTheme = templateId
+        const fetchedTheme = templateId && !normalizedData.coordination
           ? await TemplateService.getTemplateTheme(templateId)
           : null;
         const theme = fetchedTheme ?? responseTheme ?? DEFAULT_TEMPLATE_THEME;
