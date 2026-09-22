@@ -26,6 +26,8 @@ from services.api_keys import API_KEY_PREFIX, verify_api_key
 from api.v1.auth.config import SESSION_COOKIE_NAME
 from api.v1.auth.users import get_jwt_strategy
 from utils.mcp_public_urls import MCP_REQUEST_HEADER
+from utils.mcp_timing import MCPTimingMiddleware
+from services.agent_tools.config import AGENT_INSTRUCTIONS, external_agent_mode
 
 OPENAPI_SPEC_PATH = Path(__file__).with_name("openai_spec.json")
 MCP_API_BASE_URL = "http://127.0.0.1:8000"
@@ -343,6 +345,22 @@ def create_openapi_api_client() -> httpx2.AsyncClient:
     )
 
 
+def create_legacy_agent_mcp(api_client, *, name="Presenton Legacy", auth=None) -> FastMCP:
+    """Keep low-level caller/native tools available on the explicit legacy endpoint."""
+    from fastapi import FastAPI
+    from api.v1.agent_tools import AGENT_TOOLS_ROUTER
+
+    schema_app = FastAPI()
+    schema_app.include_router(AGENT_TOOLS_ROUTER)
+    server = FastMCP.from_openapi(
+        openapi_spec=schema_app.openapi(), client=api_client, name=name, auth=auth,
+        route_maps=[RouteMap(pattern=r"^/api/v1/agent-tools/.*", mcp_type=MCPType.TOOL)],
+        instructions=AGENT_INSTRUCTIONS,
+    )
+    server.add_middleware(MCPTimingMiddleware())
+    return server
+
+
 def create_mcp_server(
     api_client: httpx.AsyncClient | httpx2.AsyncClient,
     *,
@@ -350,16 +368,22 @@ def create_mcp_server(
     auth: TokenVerifier | None = None,
 ) -> FastMCP:
     """Create the MCP server with only the public presentation workflow exposed."""
-    generation_mode = get_presentation_generation_mode()
-    return FastMCP.from_openapi(
-        openapi_spec=openapi_spec,
-        client=api_client,
-        name=name,
-        auth=auth,
-        route_maps=get_mcp_route_maps(generation_mode),
-        mcp_names=MCP_TOOL_NAMES,
-        instructions=get_mcp_instructions(generation_mode),
-    )
+    if external_agent_mode():
+        from services.agent_tools.workflow_mcp import create_workflow_mcp
+        return create_workflow_mcp(api_client, auth=auth)
+    else:
+        generation_mode = get_presentation_generation_mode()
+        server = FastMCP.from_openapi(
+            openapi_spec=openapi_spec,
+            client=api_client,
+            name=name,
+            auth=auth,
+            route_maps=get_mcp_route_maps(generation_mode),
+            mcp_names=MCP_TOOL_NAMES,
+            instructions=get_mcp_instructions(generation_mode),
+        )
+    server.add_middleware(MCPTimingMiddleware())
+    return server
 
 
 async def attach_request_auth_header(request: httpx.Request | httpx2.Request) -> None:
@@ -415,6 +439,8 @@ async def attach_request_auth_header(request: httpx.Request | httpx2.Request) ->
 
 
 async def main():
+    # MCP runs in its own process, outside the FastAPI logging lifespan.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     try:
         if not is_mcp_server_enabled():
             print(
@@ -454,6 +480,15 @@ async def main():
             # Start the MCP server
             uvicorn_config = {"reload": False}
             print(f"DEBUG: Starting MCP server on host=127.0.0.1, port={args.port}")
+            if external_agent_mode():
+                import uvicorn
+                from services.agent_tools.workflow_mcp import combined_mcp_app
+                legacy = create_legacy_agent_mcp(api_client, auth=mcp_auth_provider)
+                app = combined_mcp_app(legacy, mcp, host_origin_protection=True,
+                                       allowed_hosts=MCP_ALLOWED_HOSTS,
+                                       allowed_origins=get_mcp_allowed_origins())
+                await uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port)).serve()
+                return
             await mcp.run_async(
                 transport="http",
                 host="127.0.0.1",

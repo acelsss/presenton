@@ -169,7 +169,7 @@ def test_parallel_image_generation_env(monkeypatch, raw, expected):
     [("true", 2), ("false", 1)],
 )
 def test_parallel_env_applies_to_presentation_and_assistant_generation(
-    monkeypatch, parallel_env: str, expected_max_active: int
+    monkeypatch, fake_async_session, parallel_env: str, expected_max_active: int
 ):
     monkeypatch.setenv("ENABLE_PARALLEL_IMAGE_GENERATION", parallel_env)
     active_requests = 0
@@ -206,7 +206,9 @@ def test_parallel_env_applies_to_presentation_and_assistant_generation(
         },
         properties=None,
     )
-    assistant_memory = object.__new__(PresentationChatMemoryLayer)
+    assistant_memory = PresentationChatMemoryLayer(
+        fake_async_session, presentation_slide.presentation
+    )
 
     async def generate_from_presentation_and_assistant():
         await asyncio.gather(

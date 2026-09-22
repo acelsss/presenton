@@ -307,11 +307,18 @@ class ExportTaskService:
                 "export_task.spawn",
                 task_type=task_payload.get("type"),
             )
+            node_env = dict(self._build_node_env())
+            if task_payload.get("type") == "snapshot-export":
+                allowed_env = {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE",
+                               "LOCALAPPDATA", "APPDATA", "LANG", "LC_ALL", "FONTCONFIG_PATH", "FONTCONFIG_FILE",
+                               "APP_DATA_DIRECTORY", "TEMP_DIRECTORY", "PUPPETEER_EXECUTABLE_PATH",
+                               "PUPPETEER_CACHE_DIR", "PUPPETEER_TMP_DIR", "ASSETS_BASE_URL"}
+                node_env = {key: value for key, value in node_env.items() if key.upper() in allowed_env}
             result = await self._run_bounded_child(
                 [self.node_binary, self.entrypoint_path, task_path],
                 cwd=self.export_dir,
                 timeout=self.timeout_seconds,
-                env=dict(self._build_node_env()),
+                env=node_env,
             )
             log_memory(
                 LOGGER,
@@ -397,6 +404,11 @@ class ExportTaskService:
                 asyncio.gather(process.wait(), stdout_task, stderr_task),
                 timeout=timeout,
             )
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            raise
         except asyncio.TimeoutError as exc:
             process.kill()
             await process.wait()

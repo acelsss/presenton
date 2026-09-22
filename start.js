@@ -24,6 +24,18 @@ import userConfigEnv from "./scripts/user-config-env.cjs";
 
 const { buildUserConfigFromEnv, readUserConfigEnv } = userConfigEnv;
 
+const externalAgentMode = ["1", "true"].includes(
+  (process.env.PRESENTON_EXTERNAL_AGENT || "").toLowerCase()
+);
+if (externalAgentMode) {
+  // Apply before loading configuration or spawning any child service.
+  process.env.MEM0_ENABLED = "false";
+  process.env.START_OLLAMA = "false";
+  process.env.DISABLE_IMAGE_GENERATION = "true";
+  process.env.CAN_CHANGE_KEYS = "false";
+  console.log("External agent mode: internal generation, Mem0 and Ollama disabled.");
+}
+
 process.umask(0o022);
 
 const __filename = fileURLToPath(import.meta.url);
@@ -639,7 +651,7 @@ const startServers = async (nginxReadyPromise) => {
     ["mcp_server.py", "--port", appmcpPort.toString()],
     {
       cwd: fastapiDir,
-      stdio: "ignore",
+      stdio: ["ignore", "inherit", "inherit"],
       env: process.env,
     }
   );

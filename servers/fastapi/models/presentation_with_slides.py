@@ -24,3 +24,5 @@ class PresentationWithSlides(BaseModel):
     generation_mode: Literal["standard", "smart"] = "standard"
     type: Literal["standard", "smart"] = "standard"
     community_design_ids: Optional[List[int]] = None
+    # Response metadata only; native slide rows/schema stay unchanged.
+    coordination: Optional[dict[str, Any]] = None

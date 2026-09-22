@@ -16,9 +16,14 @@ if str(FASTAPI_ROOT) not in sys.path:
 
 
 from services.icon_finder_service import ICON_FINDER_SERVICE
+from services.agent_tools.config import external_agent_mode
+from services.mem0_oss_memory import mem0_enabled
 
 
 def _warm_mem0_default_fastembed() -> None:
+    if not mem0_enabled():
+        print("Skipping Mem0 embedder warmup: memory is disabled")
+        return
     provider = (os.getenv("MEM0_EMBEDDER_PROVIDER") or "fastembed").strip() or "fastembed"
     if provider != "fastembed":
         print(
@@ -36,6 +41,13 @@ def _warm_mem0_default_fastembed() -> None:
 
 
 def main() -> None:
+    if external_agent_mode():
+        # Docker copies these cache directories even when no model is needed.
+        for name in ("HF_HOME", "PRESENTON_FASTEMBED_ICON_CACHE_DIR"):
+            if directory := os.getenv(name):
+                Path(directory).mkdir(parents=True, exist_ok=True)
+        print("Skipping FastEmbed warmup in external agent mode")
+        return
     if not ICON_FINDER_SERVICE.ensure_initialized():
         raise RuntimeError("Failed to prepare fastembed cache for icon search")
 

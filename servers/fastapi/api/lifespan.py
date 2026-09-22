@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import logging
 import os
+import asyncio
 
 from fastapi import FastAPI
 
@@ -18,6 +19,8 @@ from utils.model_availability import (
 )
 from utils.user_config import update_env_with_user_config
 from api.v1.auth.bootstrap import bootstrap_database_admin
+from services.agent_tools.config import external_agent_mode
+from utils.get_env import is_disable_auth_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +60,8 @@ async def app_lifespan(_: FastAPI):
     availability.
     """
     _configure_application_logging()
+    if external_agent_mode() and is_disable_auth_enabled():
+        raise RuntimeError("External agent mode requires authentication")
     os.makedirs(get_app_data_directory_env(), exist_ok=True)
     await migrate_database_on_startup()
     await create_db_and_tables()
@@ -65,11 +70,26 @@ async def app_lifespan(_: FastAPI):
         # BackgroundTasks are process-local and cannot resume after a restart.
         # Resolve their persisted rows before accepting polling requests.
         await fail_interrupted_async_tasks(session)
-        await migrate_provider_settings_from_file(session)
+        if not external_agent_mode():
+            await migrate_provider_settings_from_file(session)
     await import_default_templates_on_startup()
-    if get_can_change_keys_env() != "false":
-        update_env_with_user_config()
-    await check_llm_and_image_provider_api_or_model_availability()
-    yield
-    # Shutdown: release all database connections to prevent stale/leaked pools.
-    await dispose_engines()
+    if not external_agent_mode():
+        if get_can_change_keys_env() != "false":
+            update_env_with_user_config()
+        await check_llm_and_image_provider_api_or_model_availability()
+    stop = asyncio.Event()
+    worker = None
+    if external_agent_mode():
+        from services.agent_tools.workflow_worker import worker_loop
+        worker = asyncio.create_task(worker_loop(async_session_maker, stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        if worker is not None:
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+        await dispose_engines()

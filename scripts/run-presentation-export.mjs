@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTask } from "@presenton/export-core";
+import { renderSnapshot } from "./snapshot-export.mjs";
 
 function parseCookieHeader(cookieHeader) {
   if (!cookieHeader) return undefined;
@@ -94,7 +95,7 @@ async function main() {
   } = rawTask;
   task.__taskFilePath = path.resolve(taskPath);
 
-  const response = await runTask(
+  const response = await (task.type === "snapshot-export" ? renderSnapshot : runTask)(
     task,
     buildRunOptions(task, { fastapiUrl, cookieHeader }),
   );

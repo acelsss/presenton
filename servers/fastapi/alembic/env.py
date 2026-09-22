@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # Import every SQL model so they register with SQLModel.metadata before
 # autogenerate or migration execution reads it.
 from models.sql.async_task import AsyncTaskModel  # noqa: F401, E402
+from models.sql.agent_document import AgentCallerSession, AgentDocument, AgentOperationReceipt  # noqa: F401, E402
+from models.sql.ppt_workflow import PptWorkflowRef  # noqa: F401, E402
 from models.sql.async_presentation_generation_status import (  # noqa: F401, E402
     AsyncPresentationGenerationTaskModel,
 )
