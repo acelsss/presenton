@@ -92,9 +92,12 @@ def test_status_is_read_only_while_writer_is_reserved_and_refreshes_progress(tmp
                 task = await writer_service.load_task(task_id)
                 request = inputs.Task(taskRef=result["taskRef"])
                 statements = []
+                selected_columns = []
                 engine = reader.bind.sync_engine
                 def capture(conn, cursor, statement, parameters, context, executemany):
                     statements.append(statement)
+                    if context.compiled is not None:
+                        selected_columns.extend(getattr(context.compiled.statement, "selected_columns", ()))
                 event.listen(engine, "before_cursor_execute", capture)
                 try:
                     # SQLite BEGIN IMMEDIATE still permits readers, but another
@@ -105,7 +108,11 @@ def test_status_is_read_only_while_writer_is_reserved_and_refreshes_progress(tmp
                 assert status["status"] == "awaiting_content"
                 assert not reader.in_transaction() and not reader.identity_map
                 assert not any(s.lstrip().upper().startswith(("UPDATE", "INSERT", "BEGIN IMMEDIATE")) for s in statements)
-                assert all("SELECT async_tasks.payload" not in s for s in statements)
+                # PostgreSQL JSON field projections also start with payload;
+                # inspect selected columns instead of matching SQL text.
+                assert selected_columns
+                assert not any(column.shares_lineage(AsyncTaskModel.__table__.c.payload)
+                               for column in selected_columns)
                 assert task.updated_at.replace(tzinfo=None) == before_updated.replace(tzinfo=None)
                 task.payload = {**task.payload, "stage": "exporting"}
                 await writer.commit()
