@@ -211,12 +211,12 @@ function presentationActionsUiReducer(
 }
 
 const insertActions: ActionItem[] = [
-  { id: "texts", label: "Texts", icon: Type },
-  { id: "charts", label: "Charts", icon: BarChart3 },
-  { id: "infographics", label: "Infographics", icon: Shapes },
-  { id: "tables", label: "Tables", icon: Rows3 },
-  { id: "images", label: "Images", icon: Image },
-  { id: "elements", label: "Elements", icon: Shapes },
+  { id: "texts", label: "文字", icon: Type },
+  { id: "charts", label: "图表", icon: BarChart3 },
+  { id: "infographics", label: "信息图", icon: Shapes },
+  { id: "tables", label: "表格", icon: Rows3 },
+  { id: "images", label: "图片", icon: Image },
+  { id: "elements", label: "元素", icon: Shapes },
 ];
 
 const actionIconSrc: Record<ActionId, string> = {
@@ -1218,7 +1218,7 @@ function ActionsSidebar({
 }) {
   return (
     <aside
-      aria-label="Editor tools"
+      aria-label="编辑工具"
       className="ml-auto flex h-full w-[90px] font-syne shrink-0 flex-col items-center gap-5 bg-white px-[10px] py-2"
     >
       <div
@@ -1239,9 +1239,9 @@ function ActionsSidebar({
             <PrimaryActionButton
               active={activeAction === "blocks"}
               disabled={blocksUnavailable}
-              disabledReason="Blocks require a presentation template"
+              disabledReason="添加模块需要演示文稿模板"
               iconSrc={actionIconSrc.blocks}
-              label="Blocks"
+              label="模块"
               onClick={() => onActionSelect("blocks")}
             />
           </>
