@@ -91,8 +91,9 @@ test("creates line arrows as one two-point editable vector", () => {
 
 test("offers arrowhead styles instead of redundant direction presets", () => {
   const lineGroup = insertElements.ELEMENT_INSERT_GROUPS.find(
-    (group) => group.label === "Lines & Arrows",
+    (group) => group.label === "线条与箭头",
   );
+  assert.ok(lineGroup);
   const ids = lineGroup.items.map((item) => item.id);
 
   assert.deepEqual(ids, [
