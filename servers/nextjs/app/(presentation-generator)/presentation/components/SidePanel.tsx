@@ -314,7 +314,7 @@ const SidePanel = ({
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span className="whitespace-nowrap text-[11px] font-normal leading-normal tracking-[0.11px]">
-                  Add Slides
+                  添加幻灯片
                 </span>
               </button>
             </div>

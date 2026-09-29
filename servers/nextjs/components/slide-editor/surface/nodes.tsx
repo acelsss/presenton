@@ -3795,7 +3795,7 @@ function RawGanttInfographic({
         y={paddingY}
         width={labelWidth - 8}
         height={headerHeight}
-        text="Process"
+        text="流程"
         fontFamily="Arial, Helvetica, sans-serif"
         fontSize={Math.max(10, Math.min(14, headerHeight * 0.38))}
         fontStyle="bold"
@@ -4723,7 +4723,7 @@ function RawStairStepBlocksInfographic({ baseColor, data, height, interactive, p
       const icon = normalizeInfographicIcon(item?.icon,item?.color);
       return <InfographicItemGroup key={`block-step-${index}`} interactive={interactive} item={item} itemPath={[index]}>
         <Rect x={x} y={y} width={blockW+.5} height={blockH} fill={color} stroke={dark ? "#D6D6D6" : undefined} strokeWidth={dark ? 1 : 0} />
-        <Text {...infographicTargetAttrs({ kind: "text", itemPath: [index], field: "label" })} x={x+blockW*.06} y={y+blockH*.08} width={blockW*.88} height={blockH*.22} text={infographicNumberLabel(item, index, "Step")} fontFamily="Arial" fontStyle="bold" fontSize={Math.max(11,height*.053)} fill={nodeTextColor} />
+        <Text {...infographicTargetAttrs({ kind: "text", itemPath: [index], field: "label" })} x={x+blockW*.06} y={y+blockH*.08} width={blockW*.88} height={blockH*.22} text={infographicNumberLabel(item, index, "步骤")} fontFamily="Arial" fontStyle="bold" fontSize={Math.max(11,height*.053)} fill={nodeTextColor} />
         <InfographicUrlIcon icon={icon?.url ?? null} color={icon?.color ?? null} itemPath={[index]} x={x+blockW*.13} y={y+blockH*.58} size={Math.min(blockW,blockH)*.18} />
         <Text x={x+blockW*.06} y={y+blockH*.76} width={blockW*.86} height={blockH*.17} text={readString(item?.heading) ?? "Step"} fontFamily="Arial" fontStyle="bold" fontSize={Math.max(8,height*.026)} fill={nodeTextColor} />
         <Text x={x+blockW*.08} y={y+blockH+height*.018} width={blockW*.84} height={height*.13} text={readString(item?.description) ?? ""} fontFamily="Arial" fontSize={Math.max(8,height*.026)} lineHeight={1.12} fill={body} />
@@ -6127,7 +6127,7 @@ function RawComparisonMatrixInfographic(props: InfographicRendererProps) {
   return (
     <Group listening={interactive}>
       <Rect x={padding} y={top} width={criteriaWidth - 4} height={tableHeight} fill={badgeColor} />
-      <Text x={padding} y={top + headerHeight * 0.36} width={criteriaWidth - 4} align="center" text="Criteria" fontStyle="bold" fontSize={Math.max(10, height * 0.035)} fill={iconColor} />
+      <Text x={padding} y={top + headerHeight * 0.36} width={criteriaWidth - 4} align="center" text="指标" fontStyle="bold" fontSize={Math.max(10, height * 0.035)} fill={iconColor} />
       {safeCriteria.map((criterion, rowIndex) => <Text {...infographicTargetAttrs({ kind: "text", itemPath: [], field: `criteria.${rowIndex}` })} key={`criterion-${rowIndex}`} x={padding + 5} y={top + headerHeight + rowIndex * rowHeight} width={criteriaWidth - 14} height={rowHeight} align="center" verticalAlign="middle" text={criterion} fontSize={Math.max(9, height * 0.027)} fill={iconColor} />)}
       {items.map((item, index) => {
         const x = padding + criteriaWidth + index * optionWidth;

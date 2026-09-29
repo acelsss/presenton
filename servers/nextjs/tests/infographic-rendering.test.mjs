@@ -199,7 +199,7 @@ test("preserves edited infographic number labels and restores blank defaults", (
   });
 
   assert.match(stair, /Custom Step/);
-  assert.match(stair, /Step 02/);
+  assert.match(stair, /步骤 02/);
   assert.match(diagonal, /D7/);
   assert.match(chevron, /C7/);
   assert.match(impact, /I7/);
