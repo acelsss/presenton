@@ -1,0 +1,317 @@
+{
+  "schemaVersion": "1.0",
+  "id": "graphite-elements",
+  "version": "1.1.0",
+  "name": "石墨元素自由组合",
+  "supportedModes": [
+    "composition"
+  ],
+  "canvas": {
+    "width": 1280,
+    "height": 720
+  },
+  "defaultThemeRef": "graphite",
+  "themes": [
+    {
+      "id": "graphite",
+      "name": "石墨",
+      "tokens": {
+        "colors": {
+          "paper": "#FFFFFF",
+          "ink": "#111827",
+          "surface": "#F3F4F6",
+          "accent": "#EA580C",
+          "muted": "#6B7280",
+          "line": "#D1D5DB"
+        },
+        "fonts": {
+          "body": "Noto Sans SC",
+          "code": "JetBrains Mono"
+        },
+        "typography": {
+          "cover": 84,
+          "title": 38,
+          "heading": 26,
+          "body": 22,
+          "small": 18,
+          "caption": 16
+        },
+        "spacing": {
+          "margin": 64,
+          "gap": 24
+        },
+        "radii": {
+          "card": 8
+        }
+      }
+    }
+  ],
+  "elementStyles": [
+    {
+      "id": "cover_title",
+      "type": "text",
+      "name": "cover_title",
+      "properties": {
+        "font": {
+          "family": "$fonts.body",
+          "size": "$typography.cover",
+          "color": "$colors.ink",
+          "line_height": 1.2,
+          "bold": true
+        },
+        "alignment": {
+          "horizontal": "left",
+          "vertical": "top"
+        }
+      }
+    },
+    {
+      "id": "page_title",
+      "type": "text",
+      "name": "page_title",
+      "properties": {
+        "font": {
+          "family": "$fonts.body",
+          "size": "$typography.title",
+          "color": "$colors.ink",
+          "line_height": 1.2,
+          "bold": true
+        },
+        "alignment": {
+          "horizontal": "left",
+          "vertical": "top"
+        }
+      }
+    },
+    {
+      "id": "heading",
+      "type": "text",
+      "name": "heading",
+      "properties": {
+        "font": {
+          "family": "$fonts.body",
+          "size": "$typography.heading",
+          "color": "$colors.ink",
+          "line_height": 1.2,
+          "bold": true
+        },
+        "alignment": {
+          "horizontal": "left",
+          "vertical": "top"
+        }
+      }
+    },
+    {
+      "id": "body",
+      "type": "text",
+      "name": "body",
+      "properties": {
+        "font": {
+          "family": "$fonts.body",
+          "size": "$typography.body",
+          "color": "$colors.ink",
+          "line_height": 1.35,
+          "bold": false
+        },
+        "alignment": {
+          "horizontal": "left",
+          "vertical": "top"
+        }
+      }
+    },
+    {
+      "id": "small",
+      "type": "text",
+      "name": "small",
+      "properties": {
+        "font": {
+          "family": "$fonts.body",
+          "size": "$typography.small",
+          "color": "$colors.ink",
+          "line_height": 1.35,
+          "bold": false
+        },
+        "alignment": {
+          "horizontal": "left",
+          "vertical": "top"
+        }
+      }
+    },
+    {
+      "id": "caption",
+      "type": "text",
+      "name": "caption",
+      "properties": {
+        "font": {
+          "family": "$fonts.body",
+          "size": "$typography.caption",
+          "color": "$colors.ink",
+          "line_height": 1.35,
+          "bold": false
+        },
+        "alignment": {
+          "horizontal": "left",
+          "vertical": "top"
+        }
+      }
+    },
+    {
+      "id": "muted",
+      "type": "text",
+      "name": "辅助说明",
+      "extends": "small",
+      "properties": {
+        "font": {
+          "color": "$colors.muted"
+        }
+      }
+    },
+    {
+      "id": "accent_text",
+      "type": "text",
+      "name": "强调文字",
+      "extends": "heading",
+      "properties": {
+        "font": {
+          "color": "$colors.accent"
+        }
+      }
+    },
+    {
+      "id": "white_text",
+      "type": "text",
+      "name": "深色背景文字",
+      "extends": "body",
+      "properties": {
+        "font": {
+          "color": "$colors.paper"
+        }
+      }
+    },
+    {
+      "id": "paper",
+      "type": "vector",
+      "name": "paper",
+      "properties": {
+        "fill": {
+          "color": "$colors.paper"
+        }
+      }
+    },
+    {
+      "id": "surface",
+      "type": "vector",
+      "name": "surface",
+      "properties": {
+        "fill": {
+          "color": "$colors.surface"
+        }
+      }
+    },
+    {
+      "id": "ink",
+      "type": "vector",
+      "name": "ink",
+      "properties": {
+        "fill": {
+          "color": "$colors.ink"
+        }
+      }
+    },
+    {
+      "id": "accent",
+      "type": "vector",
+      "name": "accent",
+      "properties": {
+        "fill": {
+          "color": "$colors.accent"
+        }
+      }
+    },
+    {
+      "id": "connector",
+      "type": "vector",
+      "name": "连线",
+      "properties": {
+        "stroke": {
+          "color": "$colors.line",
+          "width": 2
+        }
+      }
+    }
+  ],
+  "compositions": [
+    {
+      "id": "page_base",
+      "name": "白底与页脚线，可选",
+      "root": {
+        "id": "base",
+        "type": "group",
+        "children": [
+          {
+            "id": "paper",
+            "type": "vector",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "styleRef": "paper",
+            "props": {
+              "shape": "polygon",
+              "closed": true,
+              "points": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 1280,
+                  "y": 0
+                },
+                {
+                  "x": 1280,
+                  "y": 720
+                },
+                {
+                  "x": 0,
+                  "y": 720
+                }
+              ]
+            }
+          },
+          {
+            "id": "footer_rule",
+            "type": "vector",
+            "position": {
+              "x": 64,
+              "y": 668
+            },
+            "styleRef": "connector",
+            "props": {
+              "closed": false,
+              "points": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 1152,
+                  "y": 0
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "pagePatterns": [],
+  "layouts": [],
+  "assets": [],
+  "provenance": {
+    "kind": "first-party-design-system",
+    "palette": "graphite-technical",
+    "layoutPolicy": "LLM authors geometry; no fixed page slots"
+  },
+  "diagnostics": []
+}

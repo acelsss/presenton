@@ -1,12 +1,14 @@
 'use client'
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { notify } from '@/components/ui/sonner';
 import { RootState } from '@/store/store';
 import { PresentationGenerationApi } from '../../services/api/presentation-generation';
 import { addToHistory } from '@/store/slices/undoRedoSlice';
 import type { PresentationData } from '@/store/slices/presentationGeneration';
 import type { Slide } from '../../types/slide';
 import type { AutoSaveSnapshot } from '../utils/autoSaveDiff';
+import { acknowledgeEditorPage, editorDocumentArguments, editorMetadataChanges, isEditorReadOnly, type EditorCoordination } from '../utils/editorCoordination';
 import {
     createAutoSaveSnapshot,
     fingerprintValue,
@@ -30,6 +32,9 @@ export const useAutoSave = ({
 
     const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const acknowledgedDataRef = useRef<AutoSaveSnapshot | null>(null);
+    const coordinationRef = useRef<EditorCoordination | null>(null);
+    const coordinationSourceRef = useRef<{ id: string; value: PresentationData['coordination'] } | null>(null);
+    const conflictRef = useRef(false);
     const latestDataRef = useRef<PresentationData | null>(presentationData);
     const autoSavePausedRef = useRef(true);
     const wasAutoSavePausedRef = useRef(false);
@@ -39,7 +44,7 @@ export const useAutoSave = ({
     const [isSaving, setIsSaving] = useState<boolean>(false);
 
     const autoSavePaused =
-        !enabled || isStreaming || isLoading || isLayoutLoading;
+        !enabled || isLoading || isLayoutLoading || isEditorReadOnly(presentationData, isStreaming);
 
     useEffect(() => {
         latestDataRef.current = presentationData;
@@ -48,7 +53,7 @@ export const useAutoSave = ({
 
     const saveLatest = useCallback(async () => {
         const data = latestDataRef.current;
-        if (!data || autoSavePausedRef.current) return;
+        if (!data || autoSavePausedRef.current || conflictRef.current) return;
         if (isSavingRef.current) {
             pendingSaveRef.current = true;
             return;
@@ -57,6 +62,7 @@ export const useAutoSave = ({
         const acknowledged = acknowledgedDataRef.current;
         if (!acknowledged || acknowledged.presentationId !== data.id) {
             acknowledgedDataRef.current = createAutoSaveSnapshot(data);
+            coordinationRef.current = data.coordination ?? null;
             return;
         }
 
@@ -75,9 +81,14 @@ export const useAutoSave = ({
             if (changes.structuralChange) {
                 // Serialize once after the debounce window. The API accepts the
                 // serialized body and avoids a second whole-deck stringify.
-                await PresentationGenerationApi.updatePresentationContent(
-                    JSON.stringify(data)
+                const result = await PresentationGenerationApi.updatePresentationContent(
+                    JSON.stringify(coordinationRef.current ? {
+                        id: data.id, n_slides: data.slides.length, slides: data.slides,
+                        ...editorMetadataChanges(data, acknowledged.metadataFingerprint),
+                        ...editorDocumentArguments(coordinationRef.current),
+                    } : data)
                 );
+                if (result.coordination) coordinationRef.current = result.coordination;
                 acknowledgedDataRef.current = createAutoSaveSnapshot(data);
             } else {
                 let firstError: unknown = null;
@@ -88,11 +99,17 @@ export const useAutoSave = ({
 
                 if (changes.metadataChanged) {
                     try {
-                        await PresentationGenerationApi.updatePresentationContent({
+                        const result = await PresentationGenerationApi.updatePresentationContent({
                             id: data.id,
-                            title: data.title,
-                            theme: data.theme,
+                            ...(coordinationRef.current
+                                ? editorMetadataChanges(data, acknowledged.metadataFingerprint)
+                                : { title: data.title, theme: data.theme }),
+                            ...editorDocumentArguments(coordinationRef.current),
                         });
+                        if (result.coordination) {
+                            // Metadata-only saves do not acknowledge other page contents.
+                            coordinationRef.current = { ...coordinationRef.current!, revision: result.coordination.revision };
+                        }
                         nextAcknowledged.metadataFingerprint = fingerprintValue({
                             title: data.title,
                             theme: data.theme,
@@ -105,9 +122,13 @@ export const useAutoSave = ({
 
                 for (const slide of changes.changedSlides) {
                     try {
-                        await PresentationGenerationApi.updatePresentationSlide(
-                            slide as Slide
+                        const result = await PresentationGenerationApi.updatePresentationSlide(
+                            slide as Slide,
+                            coordinationRef.current?.pageRevisions[slide.id]
                         );
+                        if (result.coordination && coordinationRef.current) {
+                            coordinationRef.current = acknowledgeEditorPage(coordinationRef.current, result.coordination);
+                        }
                         nextAcknowledged.slideFingerprints[slide.id] =
                             fingerprintValue(slide);
                         acknowledgedDataRef.current = nextAcknowledged;
@@ -123,11 +144,19 @@ export const useAutoSave = ({
             console.log('✅ Auto-save successful');
         } catch (error) {
             console.error('❌ Auto-save failed:', error);
+            if (coordinationRef.current && error && typeof error === 'object' &&
+                'status' in error && (error.status === 409 || error.status === 428)) {
+                conflictRef.current = true;
+                pendingSaveRef.current = false;
+                notify.error('Changes not saved', 'This presentation changed elsewhere. Keep a copy of your edits before reopening it.', {
+                    id: `presentation-save-conflict-${data.id}`, duration: Infinity,
+                });
+            }
         } finally {
             isSavingRef.current = false;
             setIsSaving(false);
 
-            if (pendingSaveRef.current && !autoSavePausedRef.current) {
+            if (pendingSaveRef.current && !autoSavePausedRef.current && !conflictRef.current) {
                 pendingSaveRef.current = false;
                 saveTimeoutRef.current = setTimeout(() => {
                     void saveLatestRef.current();
@@ -143,6 +172,18 @@ export const useAutoSave = ({
     // Effect to trigger auto-save when presentation data changes
     useEffect(() => {
         if (!presentationData) return;
+
+        // Local edits retain Redux's coordination object. Only a hydrated payload
+        // (or a different deck) replaces it; pausing must not rewind save receipts.
+        const source = coordinationSourceRef.current;
+        if (source?.id !== presentationData.id || source.value !== presentationData.coordination) {
+            coordinationSourceRef.current = { id: presentationData.id, value: presentationData.coordination };
+            coordinationRef.current = presentationData.coordination ?? null;
+            conflictRef.current = false;
+            // Accepted server hydration is already saved. The host bridge only
+            // applies it while clean, including text edits not yet in Redux.
+            if (!isSavingRef.current) acknowledgedDataRef.current = createAutoSaveSnapshot(presentationData);
+        }
 
         if (autoSavePaused) {
             // Changes arriving while editing is paused are server-originated
@@ -184,6 +225,8 @@ export const useAutoSave = ({
             acknowledgedDataRef.current.presentationId !== presentationData.id
         ) {
             acknowledgedDataRef.current = createAutoSaveSnapshot(presentationData);
+            coordinationRef.current = presentationData.coordination ?? null;
+            conflictRef.current = false;
             return;
         }
         
@@ -209,5 +252,19 @@ export const useAutoSave = ({
     
     return {
         isSaving,
+        flush: saveLatest,
+        getStatus: () => {
+            const data = latestDataRef.current;
+            const acknowledged = acknowledgedDataRef.current;
+            const changes = data && acknowledged ? getAutoSaveChanges(acknowledged, data) : null;
+            const active = document.activeElement;
+            const editing = active instanceof HTMLElement && (active.isContentEditable
+                || active instanceof HTMLTextAreaElement
+                || active instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'file'].includes(active.type));
+            return { ready: !!data && !!acknowledged,
+                dirty: editing || !!changes && (changes.structuralChange || changes.metadataChanged || changes.changedSlides.length > 0),
+                saving: isSavingRef.current, conflict: conflictRef.current,
+                revision: coordinationRef.current?.revision ?? 0 };
+        },
     };
 };

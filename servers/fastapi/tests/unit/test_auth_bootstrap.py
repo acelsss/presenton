@@ -1,6 +1,7 @@
 import asyncio
 from datetime import timedelta
 import json
+import os
 import stat
 
 import pytest
@@ -106,8 +107,11 @@ def test_reset_auth_recovers_admin_without_replacing_account(
     assert config["AUTH_PASSWORD_HASH"] != "old-hash"
     assert config["AUTH_SECRET_KEY"] != "old-secret"
     assert config["LLM_PROVIDER"] == "openai"
-    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
-    assert stat.S_IMODE((tmp_path / "userConfig.json.bak").stat().st_mode) == 0o600
+    # Windows does not implement POSIX mode bits; these permission assertions run
+    # on Linux CI. The account recovery assertions above apply on both platforms.
+    if os.name != "nt":
+        assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE((tmp_path / "userConfig.json.bak").stat().st_mode) == 0o600
 
 
 def test_reset_auth_without_password_refuses_to_delete_or_replace_admin(

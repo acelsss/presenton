@@ -2,6 +2,7 @@
 
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import Image from "next/image";
+import { hostEditorConfig } from "@/utils/host-editor";
 import {
   ArrowUp,
   ChevronRight,
@@ -116,7 +117,7 @@ export function ImagePickerModal({
 
   useEffect(() => {
     if (!open) return;
-    setView("discover");
+    setView(hostEditorConfig() ? "uploads" : "discover");
     setQuery(initialPrompt || "");
     setDiscoverImages([]);
     setUploadedImages([]);
@@ -427,7 +428,7 @@ export function ImagePickerModal({
 
             <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
               <nav className="flex flex-none gap-1 border-b border-[#EDEEEF] bg-white p-3 sm:w-[270px] sm:flex-col sm:border-b-0 sm:border-r sm:p-5">
-                <PickerNavButton
+                {!hostEditorConfig() && <PickerNavButton
                   active={view === "discover"}
                   icon={<ImagePlus className="size-4" strokeWidth={1.7} />}
                   label="Discover Image"
@@ -436,7 +437,7 @@ export function ImagePickerModal({
                     setIsLoadingLibrary(false);
                     setError(null);
                   }}
-                />
+                />}
                 <PickerNavButton
                   active={view === "uploads"}
                   icon={<Grid2X2 className="size-4" strokeWidth={1.7} />}

@@ -1,4 +1,5 @@
 import { Group, Rect, Text } from "react-konva";
+import { tableTracks, trackOffset } from "./table-grid";
 import { renderMarkdownTextRuns } from "@/components/slide-editor/text/markdown-text";
 import type { TextRun } from "@/components/slide-editor/types";
 import {
@@ -46,8 +47,8 @@ export function TemplateV2TableElement({
   const rows = rawTableRows(element);
   const rowCount = Math.max(1, rows.length);
   const colCount = Math.max(1, ...rows.map((row) => row.length));
-  const cellW = width / colCount;
-  const cellH = height / rowCount;
+  const widths = tableTracks(element.column_widths, colCount, width);
+  const heights = tableTracks(element.row_heights, rowCount, height);
   const font = rawFont(element);
 
   return (
@@ -55,6 +56,8 @@ export function TemplateV2TableElement({
       {rows.map((row, rowIndex) =>
         Array.from({ length: colCount }, (_, colIndex) => {
           const cell = asRecord(row[colIndex]) ?? {};
+          const cellW = widths[colIndex];
+          const cellH = heights[rowIndex];
           const firstRun = asRecord(readArray(cell.runs)[0]) ?? {};
           const cellFont = fontFromRecord(
             asRecord(cell.font) ?? asRecord(firstRun.font),
@@ -89,8 +92,8 @@ export function TemplateV2TableElement({
           return (
             <Group
               key={`${rowIndex}-${colIndex}`}
-              x={colIndex * cellW}
-              y={rowIndex * cellH}
+              x={trackOffset(widths, colIndex)}
+              y={trackOffset(heights, rowIndex)}
               onClick={(event) => {
                 if (!interactive) return;
                 event.cancelBubble = true;
@@ -137,8 +140,8 @@ export function TemplateV2TableElement({
         }),
       )}
       <SelectedTableCellOutline
-        cellH={cellH}
-        cellW={cellW}
+        heights={heights}
+        widths={widths}
         colCount={colCount}
         rowCount={rowCount}
         selectedCell={selectedCell}
@@ -232,29 +235,29 @@ function TableCellText({
 }
 
 function SelectedTableCellOutline({
-  cellH,
-  cellW,
+  heights,
+  widths,
   colCount,
   rowCount,
   selectedCell,
 }: {
-  cellH?: number;
-  cellW?: number;
+  heights: number[];
+  widths: number[];
   colCount: number;
   rowCount?: number;
   selectedCell?: { rowIndex: number; colIndex: number } | null;
 }) {
   if (!selectedCell) return null;
   if (selectedCell.colIndex < 0 || selectedCell.colIndex >= colCount) return null;
-  if (cellW == null || cellH == null || rowCount == null) return null;
+  if (rowCount == null) return null;
   if (selectedCell.rowIndex < 0 || selectedCell.rowIndex >= rowCount) return null;
 
   return (
     <Rect
-      x={selectedCell.colIndex * cellW}
-      y={selectedCell.rowIndex * cellH}
-      width={cellW}
-      height={cellH}
+      x={trackOffset(widths, selectedCell.colIndex)}
+      y={trackOffset(heights, selectedCell.rowIndex)}
+      width={widths[selectedCell.colIndex]}
+      height={heights[selectedCell.rowIndex]}
       fill="rgba(0,0,0,0)"
       stroke="#7C51F8"
       strokeWidth={2}

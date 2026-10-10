@@ -5,9 +5,11 @@ WORKDIR /app
 
 ARG CHROMIUM_VERSION=149.0.7827.196-1~deb13u1
 ARG CHROMIUM_SNAPSHOT=20260625T180000Z
+ARG PRESENTON_EXTERNAL_AGENT=false
 
 # LiteParse (Node + @llamaindex/liteparse) for document extraction; OCR via Tesseract.
 ENV APP_DATA_DIRECTORY=/app_data \
+    PRESENTON_EXTERNAL_AGENT=${PRESENTON_EXTERNAL_AGENT} \
     TEMP_DIRECTORY=/tmp/presenton \
     UV_SYSTEM_PYTHON=1 \
     UV_COMPILE_BYTECODE=1 \
@@ -59,6 +61,7 @@ COPY electron/resources/document-extraction/liteparse_runner.mjs /app/document-e
 
 COPY scripts/sync-presentation-export.cjs /app/scripts/sync-presentation-export.cjs
 COPY scripts/run-presentation-export.mjs /app/scripts/run-presentation-export.mjs
+COPY scripts/snapshot-export.mjs /app/scripts/snapshot-export.mjs
 COPY scripts/presenton-terminal-banner.mjs /app/scripts/presenton-terminal-banner.mjs
 COPY scripts/user-config-env.cjs /app/scripts/user-config-env.cjs
 RUN rm -rf /app/presentation-export \
@@ -78,8 +81,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Mem0 BM25 lemmatization requires a spaCy language model at runtime.
 # Installing it in the image avoids per-run downloads and startup self-disable.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
-    "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+    case "$(printf '%s' "$PRESENTON_EXTERNAL_AGENT" | tr '[:upper:]' '[:lower:]')" in \
+      1|true) ;; \
+      *) uv pip install --system \
+        "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" ;; \
+    esac
 
 # FastEmbed + Hugging Face Hub weights for icon search and Mem0 (no cache-only mount here:
 # those files must remain in the image layer).

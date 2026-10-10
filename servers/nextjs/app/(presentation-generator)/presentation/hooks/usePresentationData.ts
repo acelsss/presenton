@@ -24,7 +24,7 @@ export const usePresentationData = (
   const dispatch = useDispatch();
   const router = useRouter();
 
-  const fetchUserSlides = useCallback(async (options?: { clearHistory?: boolean }) => {
+  const fetchUserSlides = useCallback(async (options?: { clearHistory?: boolean; shouldApply?: () => boolean }) => {
     try {
       const data = await DashboardApi.getPresentation(presentationId, {
         cache: "no-store",
@@ -46,7 +46,7 @@ export const usePresentationData = (
       if (normalizedData) {
         const templateId = resolveTemplateIdFromPresentation(normalizedData);
         const responseTheme = normalizeTemplateTheme(normalizedData.theme);
-        const fetchedTheme = templateId
+        const fetchedTheme = templateId && !normalizedData.coordination
           ? await TemplateService.getTemplateTheme(templateId)
           : null;
         const theme = fetchedTheme ?? responseTheme ?? DEFAULT_TEMPLATE_THEME;
@@ -58,6 +58,7 @@ export const usePresentationData = (
           theme,
         };
 
+        if (options?.shouldApply && !options.shouldApply()) return undefined;
         dispatch(setPresentationData(themedData));
         if (options?.clearHistory ?? true) {
           dispatch(clearHistory());

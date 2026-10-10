@@ -140,6 +140,7 @@ export function TemplateEditorHeader({
       </div>
 
       <div className="flex h-full min-w-0 flex-1 items-center justify-end gap-[11px] px-4 sm:px-[24px]">
+        <a href="/template-inspector" className="rounded border px-3 py-2 text-sm">模板检验</a>
         <button
           className="hidden h-[33px] items-center gap-[6px] rounded-[48px] bg-white px-[10px] py-[8px] text-[14px] font-medium text-[#101323] transition-colors hover:bg-[#F7F6F9] sm:flex"
           onClick={onCopy}

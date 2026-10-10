@@ -14,6 +14,7 @@ from api.v1.auth.principal import resolve_request_principal
 from api.v1.auth.users import get_jwt_strategy
 from models.sql.user import User
 from services.database import async_session_maker
+from services.agent_tools.config import external_agent_mode
 from services.presenton_cloud_proxy import maybe_proxy_presenton_cloud_request
 from utils.get_env import get_can_change_keys_env, is_disable_auth_enabled
 from utils.user_config import update_env_with_user_config
@@ -21,7 +22,7 @@ from utils.user_config import update_env_with_user_config
 
 class UserConfigEnvUpdateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if get_can_change_keys_env() != "false":
+        if not external_agent_mode() and get_can_change_keys_env() != "false":
             update_env_with_user_config()
         return await call_next(request)
 
@@ -53,6 +54,12 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
         return path in self._PROTECTED_NON_API_PATHS
 
     async def dispatch(self, request: Request, call_next):
+        if external_agent_mode():
+            if is_disable_auth_enabled():
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "External agent mode requires authentication"},
+                )
         if is_disable_auth_enabled():
             # Electron uses the auth-disabled, single-user runtime. It still
             # needs the Presenton Cloud provider proxy when that provider is
@@ -121,7 +128,7 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
             context_token = set_current_owner_id(principal.user_id)
             admin_context_token = set_current_owner_is_admin(principal.is_admin)
             try:
-                if principal.method == "jwt":
+                if principal.method == "jwt" and not external_agent_mode():
                     cloud_response = await maybe_proxy_presenton_cloud_request(
                         request,
                         session,
@@ -140,6 +147,10 @@ class SessionAuthMiddleware(BaseHTTPMiddleware):
                         status_code=404,
                         content={"detail": "Asset not found"},
                     )
+                if external_agent_mode():
+                    # Authentication is complete. Do not hold a read transaction
+                    # (or a pool connection) across the coordinator's write.
+                    await session.close()
                 return await call_next(request)
             finally:
                 reset_current_owner_is_admin(admin_context_token)
