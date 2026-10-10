@@ -47,29 +47,41 @@ async def prepare(payload: schemas.Prepare, service: Service):
 
 @PPT_WORKFLOW_ROUTER.post("/start")
 async def start(payload: schemas.Start, service: Service, request: Request):
-    return result_links(request, await service.start(payload))
+    result = await service.start(payload)
+    from services.agent_tools.workflow_worker import wake_worker
+    wake_worker()
+    return result_links(request, result)
 
 
 @PPT_WORKFLOW_ROUTER.post("/submit")
 async def submit(payload: schemas.Submit, service: Service, request: Request):
     result = await service.submit(payload)
-    # No extra model round trip for these small native writes. Each step commits
-    # separately; if the request ends, the worker resumes from the persisted cursor.
-    deadline = time.monotonic() + 2
-    if result["status"] in {"queued", "saving"}:
-        task_ref = await service.ref(result["taskRef"], {"task"}, actor=False)
-        task_id = task_ref.task_id
-        await service.session.commit()
-        while time.monotonic() < deadline:
-            try:
-                result = await service.step(task_id)
-            except Exception:
-                # Keep the durable candidate for worker diagnosis/recovery.
-                await service.session.rollback()
-                break
-            if result["status"] not in {"queued", "saving"} or (result.get("retryAt") or 0) > time.time():
-                break
+    from services.agent_tools.workflow_worker import wake_worker
+    wake_worker()
     return result_links(request, result)
+
+
+@PPT_WORKFLOW_ROUTER.post("/preview")
+async def preview(payload: schemas.Preview, service: Service):
+    return await service.preview(payload)
+
+
+@PPT_WORKFLOW_ROUTER.post("/visual_read")
+async def visual_read(payload: schemas.VisualRead, service: Service):
+    from services.agent_tools.workflow_visual import visual_read as read
+    return await read(service, payload)
+
+
+@PPT_WORKFLOW_ROUTER.post("/visual_ack")
+async def visual_ack(payload: schemas.VisualAck, service: Service):
+    from services.agent_tools.workflow_visual import visual_ack as ack
+    return await ack(service, payload)
+
+
+@PPT_WORKFLOW_ROUTER.post("/visual_review")
+async def visual_review(payload: schemas.VisualReview, service: Service):
+    from services.agent_tools.workflow_visual import visual_review as review
+    return await review(service, payload)
 
 
 @PPT_WORKFLOW_ROUTER.post("/task")

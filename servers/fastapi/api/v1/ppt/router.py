@@ -17,6 +17,7 @@ from api.v1.ppt.endpoints.ollama import OLLAMA_ROUTER
 from api.v1.ppt.endpoints.outlines import OUTLINES_ROUTER
 from api.v1.ppt.endpoints.slide import SLIDE_ROUTER
 from api.v1.ppt.endpoints.template import TEMPLATE_ROUTER
+from api.v1.ppt.endpoints.template_packs import TEMPLATE_PACK_ROUTER
 from api.v1.ppt.endpoints.presentation import PRESENTATION_ROUTER
 from api.v1.ppt.endpoints.theme import THEMES_ROUTER
 from api.v1.ppt.endpoints.theme_generate import THEME_ROUTER
@@ -42,4 +43,5 @@ API_V1_PPT_ROUTER.include_router(THEMES_ROUTER)
 API_V1_PPT_ROUTER.include_router(THEME_ROUTER)
 API_V1_PPT_ROUTER.include_router(CHAT_ROUTER)
 API_V1_PPT_ROUTER.include_router(TEMPLATE_ROUTER)
+API_V1_PPT_ROUTER.include_router(TEMPLATE_PACK_ROUTER)
 API_V1_PPT_ROUTER.include_router(COMMUNITY_ROUTER)

@@ -2,6 +2,10 @@ import type { PresentationData } from "@/store/slices/presentationGeneration";
 
 export type EditorCoordination = NonNullable<PresentationData["coordination"]>;
 
+export function isEditorReadOnly(data: PresentationData | null, isStreaming?: boolean | null) {
+  return isStreaming === true || data?.coordination?.writable === false;
+}
+
 export function editorDocumentArguments(coordination?: EditorCoordination | null) {
   return coordination ? {
     expectedRevision: coordination.revision,

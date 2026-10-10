@@ -1,4 +1,5 @@
 import { resolveBackendAssetUrl } from "@/utils/api";
+import { tableTracks } from "@/components/slide-editor/tables/table-grid";
 import { markdownToPlainChartText } from "@/components/slide-editor/charts/chart-data";
 import { normalizeRawTextMarkdownElement } from "@/components/slide-editor/text/template-v2-text";
 import { isLatexTextRun } from "@/components/slide-editor/text/text-runs";
@@ -470,7 +471,7 @@ function renderTable(item: JsonRecord, mode: RenderMode): string {
   return `<div style="${frameStyle(
     item,
     mode
-  )}${transformStyle(item)}display:grid;grid-template-columns:repeat(${colCount},minmax(0,1fr));grid-template-rows:repeat(${rowCount},minmax(0,1fr));overflow:hidden">${cells}</div>`;
+  )}${transformStyle(item)}display:grid;grid-template-columns:${tableTracks(item.column_widths, colCount, 1).map(value => `minmax(0,${cssNumber(value)}fr)`).join(" ")};grid-template-rows:${tableTracks(item.row_heights, rowCount, 1).map(value => `minmax(0,${cssNumber(value)}fr)`).join(" ")};overflow:hidden">${cells}</div>`;
 }
 
 function renderContainer(item: JsonRecord, mode: RenderMode): string {

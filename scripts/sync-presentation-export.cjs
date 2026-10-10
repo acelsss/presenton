@@ -25,6 +25,10 @@ const installedPackageJson = path.join(
 const sourceRunner = path.join(repoRoot, "scripts", "run-presentation-export.mjs");
 const sourceSnapshotRunner = path.join(repoRoot, "scripts", "snapshot-export.mjs");
 const targetSnapshotRunner = path.join(targetRoot, "snapshot-export.mjs");
+const sessionFiles = ["snapshot-input.mjs", "render-session.mjs"];
+function syncSessionFiles() {
+  for (const file of sessionFiles) fs.copyFileSync(path.join(repoRoot, "scripts", file), path.join(targetRoot, file));
+}
 const versionManifestPath = path.join(targetRoot, "presenton-export-version.json");
 const packageJsonFile = path.join(repoRoot, "package.json");
 const cacheDir = path.join(repoRoot, ".cache", "presentation-export");
@@ -213,6 +217,9 @@ function downloadFile(url, outputPath, redirects = 5) {
 }
 
 function validateExistingRuntime(expectedVersion) {
+  for (const file of sessionFiles) {
+    if (!fs.existsSync(path.join(targetRoot, file))) return {ok: false, reason: "Missing generation renderer: " + file};
+  }
   if (!fs.existsSync(targetSnapshotRunner)) {
     return { ok: false, reason: `Missing snapshot renderer: ${targetSnapshotRunner}` };
   }
@@ -263,6 +270,7 @@ function installRuntime(version, archivePath) {
   clearDirectoryContents(targetRoot);
   fs.copyFileSync(sourceRunner, targetRunner);
   fs.copyFileSync(sourceSnapshotRunner, targetSnapshotRunner);
+  syncSessionFiles();
   fs.writeFileSync(
     path.join(targetRoot, "package.json"),
     `${JSON.stringify(
@@ -306,6 +314,7 @@ async function main() {
     // Local adapter changes do not require reinstalling the pinned renderer.
     fs.copyFileSync(sourceRunner, targetRunner);
     fs.copyFileSync(sourceSnapshotRunner, targetSnapshotRunner);
+    syncSessionFiles();
   }
   const existing = validateExistingRuntime(version);
   if (checkOnly) {

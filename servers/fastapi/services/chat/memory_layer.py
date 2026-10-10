@@ -2736,6 +2736,13 @@ class PresentationChatMemoryLayer:
                         node["text"] = joined
                 elif isinstance(node.get("text"), str):
                     node["runs"] = [{"text": node["text"]}]
+                # The editor accepts bare text, but export-core requires the
+                # semantic fields on every text node, including nested inserts.
+                # Fill only absent metadata; keep authored names and runtime IDs.
+                node.setdefault("decorative", False)
+                node.setdefault("name", str(node.get("id") or "text"))
+                node.setdefault("min_length", 0)
+                node.setdefault("max_length", max(100, len(text_runs_to_tagged_text(node.get("runs", [])))))
             elif node.get("type") == "table":
                 PresentationChatMemoryLayer._sync_ui_table_cells(node)
             for value in node.values():
@@ -3724,6 +3731,15 @@ class PresentationChatMemoryLayer:
         )
         if source_layout is None:
             return None
+
+        from templates.v2.element_composition import compose_elements, is_element_composition
+        if is_element_composition(source_layout):
+            return compose_elements(content, source_layout)
+
+        from templates.v2.composition_schema import is_composition
+        if is_composition(source_layout):
+            from templates.v2.composition import compose
+            return compose(content, source_layout)
 
         ui = copy.deepcopy(source_layout)
         theme = presentation.theme if isinstance(presentation.theme, dict) else None

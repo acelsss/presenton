@@ -460,7 +460,7 @@ class AgentDocumentService:
             presentation.n_slides = len(await self.slides(state.id))
         return result
 
-    async def mutate(self, document_id, caller, request, *, commit=True):
+    async def mutate(self, document_id, caller, request, *, commit=True, review_task_id=None):
         await self._begin_sqlite_transaction()
         batch = isinstance(request, BatchMutation)
         operations = request.operations if batch else [request]
@@ -484,7 +484,7 @@ class AgentDocumentService:
         existing = await self.receipt(request.operation_id, payload_hash)
         if existing is not None:
             return existing
-        if state.workflow_task_id:
+        if state.workflow_task_id and state.workflow_task_id != review_task_id:
             fail(409, "workflow_in_progress")
         if state.revision != request.expected_revision:
             fail(409, "revision_conflict")

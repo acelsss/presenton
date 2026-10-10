@@ -1,5 +1,5 @@
 """Freeze authorized bytes before exporting; never fetch a mutable editor URL."""
-import base64
+import asyncio
 import copy
 import hashlib
 import json
@@ -20,7 +20,7 @@ from services.export_task_service import ExportTaskService
 from utils.asset_directory_utils import resolve_app_path_to_filesystem, get_exports_directory
 
 LOGGER = logging.getLogger(__name__)
-RENDER_PHASES = {"snapshot", "slide_html", "slide_dom", "preview_dom", "preview_assets",
+RENDER_PHASES = {"snapshot", "slide_html", "slide_dom", "preview_dom", "preview_charts", "preview_assets",
                  "preview_capture", "export_pptx", "export_pdf"}
 
 
@@ -113,70 +113,31 @@ def check_asset_fingerprints(owner_id, manifest):
 
 
 @timed_stage
-async def freeze_snapshot(service, document_id, expected_assets=None):
+async def freeze_snapshot(service, document_id, expected_assets=None, *, task_id):
+    """Capture under lock, release it, then pin resource bytes in a bounded thread."""
     snapshot = await service.read(document_id)
     _, presentation = await service.document(document_id)
     expected_assets = {**(presentation.layout or {}).get("_agentAssetHashes", {}), **(expected_assets or {})}
-    check_asset_fingerprints(service.owner_id, expected_assets)
     assets = await ExistingAssets.for_document(service.session, service.owner_id, presentation.layout)
     await assets.validate([slide["ui"] for slide in snapshot["slides"]])
-    token = set_current_owner_id(service.owner_id)
-    cache = {}
-    total = 0
-
-    def asset(value):
-        nonlocal total
-        if value in cache:
-            return cache[value]
-        if not isinstance(value, str) or not value.startswith(("/app_data/", "/static/", "/vendor/fonts/")):
-            fail(422, "export_asset_must_be_local_and_owned")
-        path = resolve_app_path_to_filesystem(value)
-        if not path or not Path(path).is_file():
-            fail(422, "export_asset_missing")
-        size = Path(path).stat().st_size
-        if size > 32 * 1024 * 1024 or total + size > 64 * 1024 * 1024:
-            fail(422, "export_snapshot_asset_budget_exceeded")
-        data = Path(path).read_bytes()
-        if value in expected_assets and hashlib.sha256(data).hexdigest() != expected_assets[value]:
-            fail(409, "pinned_asset_changed")
-        total += len(data)
-        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
-        cache[value] = f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
-        return cache[value]
-
-    def walk(value):
-        if isinstance(value, list):
-            return [walk(item) for item in value]
-        if not isinstance(value, dict):
-            return value
-        result = {key: walk(item) for key, item in value.items()}
-        for key in ("url", "image_url", "icon_url", "__image_url__", "__icon_url__"):
-            if result.get(key):
-                result[key] = asset(result[key])
-        if result.get("type") == "image":
-            result["data"] = asset(result["data"])
-        return result
-
-    try:
-        snapshot = copy.deepcopy(snapshot)
-        snapshot["slides"] = [{"index": slide["index"], "slideId": slide["slideId"],
-                               "ui": walk(slide["ui"]), "speakerNote": slide["speakerNote"]}
-                              for slide in snapshot["slides"]]
-        snapshot["theme"] = walk(snapshot.get("theme"))
-        snapshot["fonts"] = {name: asset(url) for name, url in (presentation.fonts or {}).items()}
-        return snapshot
-    finally:
-        reset_current_owner_id(token)
+    snapshot["fonts"] = copy.deepcopy(presentation.fonts or {})
+    await service.session.rollback()
+    from services.agent_tools.workflow_resources import freeze_resources
+    await asyncio.to_thread(check_asset_fingerprints, service.owner_id, expected_assets)
+    return await asyncio.to_thread(freeze_resources, service.owner_id, task_id, snapshot, expected_assets)
 
 
 @timed_stage
-async def render_snapshot(owner_id, task_id, claim_id, snapshot, formats):
+async def render_snapshot(owner_id, task_id, claim_id, snapshot, formats, *, fingerprint=None):
     token = set_current_owner_id(owner_id)
     try:
         directory = Path(get_exports_directory()) / "workflow" / task_id / claim_id
         directory.mkdir(parents=True, exist_ok=True)
         runtime = ExportTaskService(timeout_seconds=300)
-        result = await runtime._run_task({"type": "snapshot-export", "snapshot": snapshot,
+        fingerprint = fingerprint or snapshot.get("_snapshotFile")
+        source = {"snapshotPath": str(snapshot_directory(owner_id, task_id) / (fingerprint + ".json")),
+                  "snapshotHash": fingerprint} if fingerprint else {"snapshot": snapshot}
+        result = await runtime._run_task({"type": "snapshot-export", **source,
                                            "formats": formats, "outputDirectory": str(directory)},
                                           "Snapshot renderer produced no result")
         for item in result.get("phases", []):

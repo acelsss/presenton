@@ -91,6 +91,8 @@ import {
   type TemplateV2SurfaceSelectedDetail,
 } from "@/components/slide-editor/events/events";
 import Chat from "./Chat";
+import { hostAsset } from "@/utils/host-editor";
+import { ImagePickerModal } from "@/components/slide-editor/images/ImagePickerModal";
 import TemplateService from "../../services/api/template";
 import { TemplateV2HtmlSlidePreview } from "../../components/TemplateV2HtmlSlidePreview";
 import { isTemplateFreePresentation } from "../../_shared/blank-slide";
@@ -104,6 +106,7 @@ import {
 } from "./InsertPalettePreview";
 
 type PresentationActionsProps = React.ComponentProps<typeof Chat> & {
+  hideAssistant?: boolean;
   editingDisabled?: boolean;
   presentationData?: unknown;
   panelOpen?: boolean;
@@ -400,7 +403,7 @@ const NavButton = ({
           alt=""
           aria-hidden="true"
           className="h-[14px] w-[14px]"
-          src={actionIconSrc[item.id]}
+          src={hostAsset(actionIconSrc[item.id])}
         />
       </span>
       <span>{item.label}</span>
@@ -1195,7 +1198,7 @@ function PrimaryActionButton({
           alt=""
           aria-hidden="true"
           className={label === "AI" ? "h-[18px] w-[18.643px]" : "h-[14px] w-[14px]"}
-          src={iconSrc}
+          src={hostAsset(iconSrc)}
         />
       </span>
       <span className="text-[12px] font-normal leading-normal text-[#7A5AF8]">
@@ -1206,11 +1209,13 @@ function PrimaryActionButton({
 }
 
 function ActionsSidebar({
+  hideAssistant = false,
   activeAction,
   aiOnly = false,
   blocksUnavailable = false,
   onActionSelect,
 }: {
+  hideAssistant?: boolean;
   activeAction: ActionId;
   aiOnly?: boolean;
   blocksUnavailable?: boolean;
@@ -1227,12 +1232,12 @@ function ActionsSidebar({
           background: "rgba(244, 243, 255, 0.60)",
         }}
       >
-        <PrimaryActionButton
+        {!hideAssistant && <PrimaryActionButton
           active={activeAction === "ai"}
           iconSrc={actionIconSrc.ai}
           label="AI"
           onClick={() => onActionSelect("ai")}
-        />
+        />}
         {!aiOnly && (
           <>
             <div className="h-0 w-[30px] border-t border-[#EDEEEF]" />
@@ -1270,6 +1275,7 @@ function ActionsSidebar({
 }
 
 function ActionsPanel({
+  hideAssistant = false,
   activeAction,
   aiOnly = false,
   blocksUnavailable = false,
@@ -1286,6 +1292,7 @@ function ActionsPanel({
   presentationId,
   templateTheme,
 }: {
+  hideAssistant?: boolean;
   activeAction: ActionId;
   aiOnly?: boolean;
   blocksUnavailable?: boolean;
@@ -1310,13 +1317,13 @@ function ActionsPanel({
 }) {
   return (
     <div className="min-w-0 flex-1 bg-white">
-      <div className={cn("h-full", activeAction === "ai" ? "block" : "hidden")}>
+      {!hideAssistant && <div className={cn("h-full", activeAction === "ai" ? "block" : "hidden")}>
         <Chat
           {...chatProps}
           presentationData={presentationData}
           inputDisabled={editingDisabled}
         />
-      </div>
+      </div>}
 
       {!aiOnly && !blocksUnavailable && activeAction === "blocks" && (
         <BlocksPanel
@@ -1414,6 +1421,7 @@ function templateV2TargetKey(
 
 const PresentationActions = (props: PresentationActionsProps) => {
   const {
+    hideAssistant = false,
     editingDisabled = false,
     presentationData,
     panelOpen = true,
@@ -1428,8 +1436,9 @@ const PresentationActions = (props: PresentationActionsProps) => {
   );
   const [{ activeAction }, dispatchUiState] = useReducer(
     presentationActionsUiReducer,
-    initialPresentationActionsUiState,
+    hideAssistant ? { activeAction: "texts" as ActionId } : initialPresentationActionsUiState,
   );
+  const [imageInsertItem, setImageInsertItem] = useState<PaletteItem | null>(null);
   const [templateV2SelectionContext, setTemplateV2SelectionContext] = useState<{
     slideIndex: number | null;
     target: TemplateV2SurfaceSelectedDetail["selection"];
@@ -1612,6 +1621,7 @@ const PresentationActions = (props: PresentationActionsProps) => {
   };
 
   const handleImageItemSelect = (item: PaletteItem) => {
+    if (hideAssistant) { setImageInsertItem(item); return; }
     if (
       insertEditorContent(
         createImageInsertContent(item.id, templateTheme),
@@ -1718,6 +1728,7 @@ const PresentationActions = (props: PresentationActionsProps) => {
     >
       {panelOpen ? (
         <ActionsPanel
+          hideAssistant={hideAssistant}
           activeAction={activeAction}
           aiOnly={aiOnly}
           blocksUnavailable={blocksUnavailable}
@@ -1747,11 +1758,20 @@ const PresentationActions = (props: PresentationActionsProps) => {
         />
       ) : null}
       <ActionsSidebar
+        hideAssistant={hideAssistant}
         activeAction={activeAction}
         aiOnly={aiOnly}
         blocksUnavailable={blocksUnavailable}
         onActionSelect={handleActionSelect}
       />
+      {hideAssistant && <ImagePickerModal open={!!imageInsertItem} onClose={() => setImageInsertItem(null)} onSelect={(url) => {
+        if (imageInsertItem) {
+          const content = createImageInsertContent(imageInsertItem.id, templateTheme);
+          const image = JSON.parse(JSON.stringify(content), (_key, value) => value === "/placeholder.jpg" ? url : value);
+          insertEditorContent(image, imageInsertItem.label);
+        }
+        setImageInsertItem(null);
+      }} />}
     </div>
   );
 };

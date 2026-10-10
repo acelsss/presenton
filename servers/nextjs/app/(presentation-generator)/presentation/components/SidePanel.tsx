@@ -36,6 +36,7 @@ import {
   isTemplateFreePresentation,
 } from "../../_shared/blank-slide";
 import { MAX_NUMBER_OF_SLIDES } from "@/utils/presentationLimits";
+import { isEditorReadOnly } from "../utils/editorCoordination";
 
 interface SidePanelProps {
   selectedSlide: number;
@@ -65,6 +66,7 @@ const SidePanel = ({
   const { presentationData, isStreaming } = useSelector(
     (state: RootState) => state.presentationGeneration
   );
+  const editingDisabled = isEditorReadOnly(presentationData, isStreaming);
 
   const dispatch = useDispatch();
 
@@ -89,7 +91,7 @@ const SidePanel = ({
     );
 
   const handleAddSlideClick = () => {
-    if (!presentationData?.slides?.length || isStreaming) return;
+    if (!presentationData?.slides?.length || editingDisabled) return;
 
     if (presentationData.slides.length >= MAX_NUMBER_OF_SLIDES) {
       notify.warning(
@@ -156,7 +158,7 @@ const SidePanel = ({
   const handleDragEnd = (event: any) => {
     const { active, over } = event;
 
-    if (!active || !over || !presentationData?.slides) return;
+    if (editingDisabled || !active || !over || !presentationData?.slides) return;
 
     if (active.id !== over.id) {
       // Find the indices of the dragged and target items
@@ -210,7 +212,7 @@ const SidePanel = ({
     lastSlideTemplateId &&
     typeof document !== "undefined";
 
-  const newSlideModal = shouldShowNewSlideModal
+  const newSlideModal = shouldShowNewSlideModal && !editingDisabled
     ? createPortal(
         <div
           className="fixed inset-0 z-[1000] overflow-y-auto bg-black/50 px-4 py-16"
@@ -259,7 +261,7 @@ const SidePanel = ({
                 isSmartPresentation ? "" : "pb-[76px]"
               }`}
             >
-              {isStreaming ? (
+              {editingDisabled ? (
                 presentationData &&
                 presentationData?.slides.map((slide: any, index: number) => (
                   <SlideThumbnailCard
@@ -310,6 +312,7 @@ const SidePanel = ({
               <button
                 type="button"
                 onClick={handleAddSlideClick}
+                disabled={editingDisabled}
                 className="flex w-[70px] cursor-pointer flex-col items-center justify-center gap-2 px-3 text-black transition-opacity duration-200 hover:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5141E5] focus-visible:ring-offset-2"
               >
                 <Plus className="h-3.5 w-3.5" />

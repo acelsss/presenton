@@ -6,7 +6,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
-let directory, acknowledgeEditorPage, editorDocumentArguments, editorMetadataChanges;
+let directory, acknowledgeEditorPage, editorDocumentArguments, editorMetadataChanges, isEditorReadOnly;
 test.before(async () => {
   directory = await mkdtemp(path.join(tmpdir(), "presenton-editor-"));
   const output = path.join(directory, "editor.mjs");
@@ -14,12 +14,18 @@ test.before(async () => {
     entryPoints: ["app/(presentation-generator)/presentation/utils/editorCoordination.ts"],
     outfile: output, bundle: true, platform: "node", format: "esm", logLevel: "silent",
   });
-  ({ acknowledgeEditorPage, editorDocumentArguments, editorMetadataChanges } = await import(pathToFileURL(output).href));
+  ({ acknowledgeEditorPage, editorDocumentArguments, editorMetadataChanges, isEditorReadOnly } = await import(pathToFileURL(output).href));
 });
 test.after(async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
 
 test("ordinary decks keep the existing request contract", () => {
   assert.deepEqual(editorDocumentArguments(null), {});
+});
+test("managed read-only decks cannot edit even when native streaming is inactive", () => {
+  assert.equal(isEditorReadOnly({ coordination: { writable: false } }, false), true);
+  assert.equal(isEditorReadOnly({ coordination: { writable: true } }, false), false);
+  assert.equal(isEditorReadOnly({}, false), false);
+  assert.equal(isEditorReadOnly({}, true), true);
 });
 test("renaming never writes a render-normalized theme back to the manuscript", () => {
   const renderedTheme = { fonts: { textFont: { name: "Fallback" } } };

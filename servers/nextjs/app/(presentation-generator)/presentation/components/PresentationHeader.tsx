@@ -32,6 +32,7 @@ import {
   MixpanelEvent,
 } from "@/utils/mixpanel";
 import { usePresentationUndoRedo } from "../hooks/PresentationUndoRedo";
+import { isEditorReadOnly } from "../utils/editorCoordination";
 import ToolTip from "@/components/ToolTip";
 import {
   clearChatHtmlSelection,
@@ -125,6 +126,7 @@ const PresentationHeader = ({
     generationMetrics,
   } = useSelector((state: RootState) => state.presentationGeneration);
   const { onUndo, onRedo, canUndo, canRedo } = usePresentationUndoRedo();
+  const editingDisabled = isEditorReadOnly(presentationData, isStreaming);
 
   useEffect(() => {
     if (isEditingTitle) {
@@ -155,13 +157,13 @@ const PresentationHeader = ({
   };
 
   const beginTitleEdit = () => {
-    if (isStreaming || !presentationData) return;
+    if (editingDisabled || !presentationData) return;
     setDraftTitle(presentationData.title || "");
     setIsEditingTitle(true);
   };
 
   const commitTitleEdit = () => {
-    if (!presentationData) {
+    if (!presentationData || editingDisabled) {
       setIsEditingTitle(false);
       return;
     }
@@ -542,7 +544,7 @@ const PresentationHeader = ({
         <button
           type="button"
           onClick={beginTitleEdit}
-          disabled={isStreaming || !presentationData}
+          disabled={editingDisabled || !presentationData}
           className={cn(
             "group/title flex w-full min-w-0 items-center gap-2.5 rounded-[14px] px-3 py-2 text-left -mx-3 transition-colors",
             "hover:bg-[#F6F6F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5141e5] focus-visible:ring-offset-2",
@@ -555,7 +557,7 @@ const PresentationHeader = ({
               className="mb-0 min-w-0 overflow-hidden text-ellipsis line-clamp-1 text-sm text-[#101323] prose-p:my-0 prose-headings:my-0"
             />
           </h2>
-          {presentationData && !isStreaming && (
+          {presentationData && !editingDisabled && (
             <Pencil
               className="h-3.5 w-3.5 shrink-0 text-[#101323]/40 transition-all duration-200 group-hover/title:text-[#5141e5] opacity-80 sm:opacity-0 sm:group-hover/title:opacity-100 group-hover/title:opacity-100"
               aria-hidden
@@ -578,7 +580,7 @@ const PresentationHeader = ({
             alt=""
             className="w-10 h-10 cursor-pointer object-contain"
           />
-          {presentationData && !isStreaming && !isEditingTitle ? (
+          {presentationData && !editingDisabled && !isEditingTitle ? (
             <ToolTip content="Rename presentation">{titleBlock}</ToolTip>
           ) : (
             titleBlock
@@ -642,6 +644,7 @@ const PresentationHeader = ({
               <button
                 type="button"
                 onClick={() => setIsRegenerateConfirmOpen(true)}
+                disabled={editingDisabled}
                 className="group"
               >
                 <RotateCcw className="w-3.5 h-3.5 text-[#101323] group-hover:text-[#5141e5] duration-300" />

@@ -10,17 +10,22 @@ x-external-agent-environment: &external-agent-environment
 x-external-agent-build: &external-agent-build
   args:
     PRESENTON_EXTERNAL_AGENT: "true"
+    INSTALL_EXTENDED_FONTS: "false"
 
 services:
   production:
+    init: true
     build: *external-agent-build
     environment: *external-agent-environment
   production-gpu:
+    init: true
     build: *external-agent-build
     environment: *external-agent-environment
   development:
+    init: true
     build: *external-agent-build
     environment: *external-agent-environment
   development-gpu:
+    init: true
     build: *external-agent-build
     environment: *external-agent-environment

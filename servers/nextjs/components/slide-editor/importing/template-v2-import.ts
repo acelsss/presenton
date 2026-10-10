@@ -856,6 +856,8 @@ function adaptTable(raw: UnknownRecord): SlideElement {
   return {
     ...baseElement(raw),
     type: "table",
+    column_widths: readArray(raw, "column_widths").filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0),
+    row_heights: readArray(raw, "row_heights").filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0),
     font: adaptFont(readRecord(raw, "font")),
     columns,
     rows: rows.length > 0 ? rows : [columns],

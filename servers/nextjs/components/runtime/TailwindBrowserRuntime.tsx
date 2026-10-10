@@ -1,6 +1,7 @@
 "use client";
 
 import Script from "next/script";
+import { hostAsset } from "@/utils/host-editor";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -50,7 +51,7 @@ export default function TailwindBrowserRuntime() {
         id="presenton-shared-tailwind-runtime"
         onLoad={notifyRuntimeReady}
         onReady={notifyRuntimeReady}
-        src={TAILWIND_BROWSER_SCRIPT_URL}
+        src={hostAsset(TAILWIND_BROWSER_SCRIPT_URL)}
         strategy="afterInteractive"
       />
     </>

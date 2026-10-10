@@ -90,6 +90,8 @@ class SlideLayout(BaseModel):
     id: str
     description: str
     components: list[Component]
+    renderer: Literal["native-blocks-v1", "native-elements-v1"] | None = None
+    element_pack: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _component_ids_must_be_unique(self) -> "SlideLayout":

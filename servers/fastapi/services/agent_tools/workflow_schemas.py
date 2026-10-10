@@ -29,6 +29,45 @@ class Start(ProtocolModel):
     preparation_ref: str = Field(alias="preparationRef", min_length=20, max_length=100)
     template_ref: str = Field(alias="templateRef", min_length=1, max_length=100)
     layout_plan: list[str] = Field(alias="layoutPlan", min_length=1, max_length=MAX_NUMBER_OF_SLIDES)
+    visual_review_required: bool = Field(default=False, alias="visualReviewRequired")
+
+
+class Preview(ProtocolModel):
+    preparation_ref: str = Field(alias="preparationRef", min_length=20, max_length=100)
+    template_ref: str = Field(alias="templateRef", min_length=1, max_length=100)
+
+
+class VisualPage(ProtocolModel):
+    slide_id: uuid.UUID = Field(alias="slideId")
+    expected_page_revision: int = Field(alias="expectedPageRevision", ge=0, strict=True)
+
+
+class VisualRead(ProtocolModel):
+    task_ref: str = Field(alias="taskRef", min_length=20, max_length=100)
+    pages: list[VisualPage] = Field(min_length=1, max_length=3)
+    delivery_context: str = Field(alias="deliveryContext", min_length=1, max_length=200)
+
+
+class VisualAck(ProtocolModel):
+    task_ref: str = Field(alias="taskRef", min_length=20, max_length=100)
+    evidence_ids: list[str] = Field(alias="evidenceIds", min_length=1, max_length=3)
+    delivery_context: str = Field(alias="deliveryContext", min_length=1, max_length=200)
+
+
+class VisualReview(ProtocolModel):
+    task_ref: str = Field(alias="taskRef", min_length=20, max_length=100)
+    evidence_id: str = Field(alias="evidenceId", min_length=20, max_length=100)
+    verdict: Literal["pass", "needs_changes"]
+    issues: list[str] = Field(default_factory=list, max_length=20)
+    summary: str = Field(default="", max_length=3000)
+    delivery_context: str = Field(alias="deliveryContext", min_length=1, max_length=200)
+
+    @field_validator("issues")
+    @classmethod
+    def bounded_issues(cls, values):
+        if any(not v.strip() or len(v) > 1000 for v in values):
+            raise ValueError("Each visual issue must be nonempty and <=1000 characters")
+        return values
 
 
 class Page(ProtocolModel):
@@ -96,6 +135,7 @@ class Edit(RevisionTarget):
         description="Preferred: independent per-page versions let multiple agents edit different slides concurrently.")
     operations: list[ToolRequest] = Field(default_factory=list, max_length=20,
         description="Whole-document/structural operations require expectedRevision. Use pageEdits for page content.")
+    task_ref: str | None = Field(default=None, alias="taskRef", min_length=20, max_length=100)
 
     @model_validator(mode="after")
     def target(self):
@@ -107,6 +147,8 @@ class Edit(RevisionTarget):
             if sum(len(page.operations) for page in self.page_edits) > 20:
                 raise ValueError("At most 20 native operations per atomic edit")
             return self
+        if self.task_ref:
+            raise ValueError("Generation review edits require pageEdits")
         if not self.operations:
             raise ValueError("Supply pageEdits, or structural operations and expectedRevision")
         return super().target()

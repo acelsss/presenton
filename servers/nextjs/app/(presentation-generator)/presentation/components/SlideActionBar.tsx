@@ -41,6 +41,7 @@ import {
 } from "../../_shared/blank-slide";
 import NewSlide from "./NewSlide";
 import { MAX_NUMBER_OF_SLIDES } from "@/utils/presentationLimits";
+import { isEditorReadOnly } from "../utils/editorCoordination";
 
 interface SlideActionBarProps {
   slide: any;
@@ -72,8 +73,10 @@ const SlideActionBar = ({
   const [showNewSlideSelection, setShowNewSlideSelection] = useState(false);
   const [isSpeakerPopoverOpen, setIsSpeakerPopoverOpen] = useState(false);
   const [isSlideMenuOpen, setIsSlideMenuOpen] = useState(false);
-  const isStreaming = useSelector(
-    (state: RootState) => state.presentationGeneration.isStreaming
+  const editingDisabled = useSelector(
+    (state: RootState) => isEditorReadOnly(
+      state.presentationGeneration.presentationData, state.presentationGeneration.isStreaming
+    )
   );
   const slideCount = useSelector((state: RootState) => {
     const currentSlides = state.presentationGeneration.presentationData?.slides;
@@ -104,7 +107,7 @@ const SlideActionBar = ({
   const keepVisible =
     showNewSlideSelection || isSpeakerPopoverOpen || isSlideMenuOpen;
 
-  if (!slide || !hasPresentation || slideCount === 0 || isStreaming) {
+  if (!slide || !hasPresentation || slideCount === 0 || editingDisabled) {
     return null;
   }
 

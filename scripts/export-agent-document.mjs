@@ -9,7 +9,7 @@ const root=path.resolve(here,'..');
 const out=process.argv[2] ? path.resolve(process.argv[2]) : path.join(root,'out/claude-ppt-demo');
 const doc=JSON.parse(await fs.readFile(path.join(out,'render-snapshot.json'),'utf8'));
 const started=Date.now();
-const browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH ?? 'C:/Users/12555/AppData/Local/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-win64/chrome-headless-shell.exe',args:['--no-sandbox','--disable-gpu']});
+const browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH || undefined,args:['--no-sandbox','--disable-gpu']});
 const opts={outputDirectory:out,tempDirectory:path.join(out,'.export-temp'),getBrowser:()=>browser};
 await fs.mkdir(opts.tempDirectory,{recursive:true});
 const escape=s=>String(s).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');

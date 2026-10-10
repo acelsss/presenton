@@ -16,7 +16,7 @@ from models.sql.async_presentation_generation_status import (
 from models.sql.chat_history_message import ChatHistoryMessageModel
 from models.sql.font_upload import FontUpload
 from models.sql.api_key import ApiKey
-from models.sql.agent_document import AgentCallerSession, AgentDocument, AgentOperationReceipt
+from models.sql.agent_document import AgentCallerSession, AgentDocument, AgentOperationReceipt, AgentPageRevision
 from models.sql.ppt_workflow import PptWorkflowRef
 from models.sql.image_asset import ImageAsset
 from models.sql.key_value import KeyValueSqlModel
@@ -26,6 +26,7 @@ from models.sql.presentation import PresentationModel
 from models.sql.template import TemplateModel
 from models.sql.template_create_info import TemplateCreateInfoModel
 from models.sql.template_v2 import TemplateV2
+from models.sql.template_pack_version import TemplatePackVersion
 from models.sql.slide import SlideModel
 from models.sql.webhook_subscription import WebhookSubscription
 from models.sql.user import User
@@ -59,6 +60,7 @@ async_session_maker = async_sessionmaker(sql_engine, expire_on_commit=False)
 
 
 _STRICT_OWNER_MODELS = (
+    TemplatePackVersion,
     PptWorkflowRef,
     AgentCallerSession,
     AgentDocument,
@@ -171,10 +173,12 @@ async def create_db_and_tables():
                         AgentCallerSession.__table__,
                         AgentDocument.__table__,
                         AgentOperationReceipt.__table__,
+                        AgentPageRevision.__table__,
                         PptWorkflowRef.__table__,
                         SlideModel.__table__,
                         KeyValueSqlModel.__table__,
                         TemplateV2.__table__,
+                        TemplatePackVersion.__table__,
                         ChatHistoryMessageModel.__table__,
                         ImageAsset.__table__,
                         FontUpload.__table__,
