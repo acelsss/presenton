@@ -11,6 +11,8 @@ x-external-agent-build: &external-agent-build
   args:
     PRESENTON_EXTERNAL_AGENT: "true"
     INSTALL_EXTENDED_FONTS: "false"
+    PRESENTON_HOST_ASSET_PREFIX: "/api/presentation-editor-assets"
+    NEXT_PUBLIC_HOST_ASSET_PREFIX: "/api/presentation-editor-assets"
 
 services:
   production:

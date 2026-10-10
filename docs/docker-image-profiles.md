@@ -13,6 +13,16 @@ Truth-Seeker's embedded editor needs its asset prefix at **build time**. Build
 the complete image from this repository rather than copying a new Next.js build
 over an older Presenton image:
 
+`docker-compose.external-agent.yml` supplies both prefixes below for all four
+services. Local Truth-Seeker integration and the 8443 demo must use the same
+exported image, identified by the archive SHA-256 and Linux config digest.
+Changing runtime environment variables cannot repair an image built without
+the prefix. Before switching, check Next.js `required-server-files.json` and
+load `/embed?hostEditor=1`: every emitted CSS/JS URL must use the host prefix,
+and each asset must return the correct MIME and content. After deployment,
+reopen an authenticated host editor and verify rendering, page selection and
+zoom; native API health alone does not validate the embedded UI.
+
 ```sh
 docker build -f Dockerfile \
   --build-arg PRESENTON_EXTERNAL_AGENT=true \
