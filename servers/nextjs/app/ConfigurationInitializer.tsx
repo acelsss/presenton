@@ -54,7 +54,8 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
   );
 
   const route = usePathname();
-  const shouldShowStartupSplash = !route?.startsWith("/pdf-maker");
+  const isTemplateInspector = route === "/template-inspector";
+  const shouldShowStartupSplash = !route?.startsWith("/pdf-maker") && !isTemplateInspector;
   const isSettingsRoute =
     route === "/settings" || route?.startsWith("/settings/");
   const [isLoading, setIsLoading] = useState(
@@ -77,6 +78,7 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
     if (
       route === '/' ||
       isSettingsRoute ||
+      isTemplateInspector ||
       route.startsWith('/pdf-maker')
     ) {
       return;
@@ -171,7 +173,7 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
     return () => {
       cancelled = true;
     };
-  }, [canChangeKeys, dispatch, isSettingsRoute, route, router]);
+  }, [canChangeKeys, dispatch, isSettingsRoute, isTemplateInspector, route, router]);
 
   useEffect(() => {
     if (!shouldShowStartupSplash) {
@@ -201,7 +203,7 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
   }
 
   const fetchUserConfigState = async () => {
-    if (route.startsWith("/pdf-maker")) {
+    if (route.startsWith("/pdf-maker") || isTemplateInspector) {
       setIsLoading(false);
       return;
     }

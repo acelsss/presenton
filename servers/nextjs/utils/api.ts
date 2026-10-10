@@ -1,4 +1,5 @@
 import { extractApiErrorMessage } from "@/utils/apiErrorMessages";
+import { hostEditorConfig, hostAsset } from "./host-editor";
 
 export const BACKEND_CONNECTION_ERROR_MESSAGE =
   "Check that the FastAPI backend is running and that the frontend can reach it.";
@@ -80,6 +81,8 @@ function shouldUseDirectFastApiOriginInBrowser(): boolean {
 
 function resolveBackendPathForRuntime(path: string): string {
   const normalizedPath = withLeadingSlash(path);
+  const host = hostEditorConfig();
+  if (host) return `${host.base}${normalizedPath}`;
 
   // Docker/web runtime should stay same-origin and use nginx reverse proxy.
   if (
@@ -284,6 +287,7 @@ function splitPathAndSuffix(value: string): { path: string; suffix: string } {
 // Resolve backend-served asset paths to the runtime-appropriate backend path.
 export function resolveBackendAssetUrl(path?: string): string {
   if (!path) return "";
+  if (path.startsWith("/vendor/")) return hostAsset(path);
 
   const trimmedPath = path.trim();
   if (!trimmedPath) return "";

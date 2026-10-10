@@ -7,12 +7,16 @@ node_modules
 **/.next-build
 **/.venv
 **/.pytest_cache
+**/.ruff_cache
+**/.coverage
+**/.playwright-cli
 **/__pycache__
 **/*.pyc
 **/debug
 **/fastembed_cache
 **/chroma
 .cache
+.local
 app_data
 presentation-export
 servers/fastapi/tests

@@ -2002,6 +2002,42 @@ def test_add_slide_element_rejects_removed_geometry_types():
     assert session.commit_count == 0
 
 
+def test_add_nested_text_fills_export_metadata_without_losing_content_or_ids():
+    from templates.v2.models.elements import Text
+
+    slide = _slide()
+    tools, session = _tools(slide)
+    request_text = '{"tool":"search_orders","arguments":{"order_id":"A-10001"}}'
+    element = {
+        "type": "group", "name": "example", "children": [
+            {"type": "text", "id": "request-example", "text": request_text,
+             "position": {"x": 24, "y": 12}, "size": {"width": 800, "height": 40},
+             "font": {"family": "JetBrains Mono", "size": 18},
+             "runtimeField": {"preserved": True}},
+            {"type": "text", "name": "authored-name", "decorative": True,
+             "min_length": 2, "max_length": 400, "runs": [{"text": "Example"}]},
+        ],
+    }
+    result = _call(tools, "addElement", {
+        "index": 0, "componentId": "hero", "element": json.dumps(element),
+    })
+    assert result["ok"] is True
+    inserted = slide.ui["components"][0]["elements"][-1]["children"]
+    # This is the public text contract used by the renderer, not just editor UI.
+    parsed = Text.model_validate(inserted[0])
+    assert parsed.runs[0].text == request_text
+    assert parsed.name == "request-example"
+    assert parsed.decorative is False
+    assert parsed.min_length == 0
+    assert parsed.max_length >= len(request_text)
+    assert inserted[0]["runtimeField"] == {"preserved": True}
+    assert inserted[1]["name"] == "authored-name"
+    assert inserted[1]["decorative"] is True
+    assert inserted[1]["min_length"] == 2
+    assert inserted[1]["max_length"] == 400
+    assert session.commit_count == 1
+
+
 def test_add_free_vector_normalizes_points_into_component_coordinates():
     slide = _slide()
     tools, session = _tools(slide)

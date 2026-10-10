@@ -4,16 +4,18 @@ import { RootState } from "@/store/store";
 import { redo, undo } from "@/store/slices/undoRedoSlice";
 import { useKeyboardShortcut } from "../../hooks/use-keyboard-shortcut";
 import { setPresentationData } from "@/store/slices/presentationGeneration";
+import { isEditorReadOnly } from "../utils/editorCoordination";
 
 export const usePresentationUndoRedo = () => {
   const dispatch = useDispatch();
   const undoRedoState = useSelector((state: RootState) => state.undoRedo);
-  const { presentationData } = useSelector(
+  const { presentationData, isStreaming } = useSelector(
     (state: RootState) => state.presentationGeneration
   );
 
-  const canUndo = undoRedoState.past.length > 0;
-  const canRedo = undoRedoState.future.length > 0;
+  const editingDisabled = isEditorReadOnly(presentationData, isStreaming);
+  const canUndo = !editingDisabled && undoRedoState.past.length > 0;
+  const canRedo = !editingDisabled && undoRedoState.future.length > 0;
 
   const applySlidesSnapshot = useCallback(
     (slidesSnapshot: unknown) => {

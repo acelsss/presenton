@@ -159,3 +159,20 @@ test("honors text-list item and marker gaps in HTML", () => {
   assert.match(listHtml, /<span aria-hidden="true">•<\/span>/);
   assert.match(listHtml, /<li style="margin-top:11px;/);
 });
+
+test("preserves source table track proportions and cell backgrounds", () => {
+  const html = renderer.templateV2UiToHtmlFragment({ elements: [{
+    type: "table", size: { width: 600, height: 180 },
+    column_widths: [100, 500], row_heights: [60, 120],
+    columns: [{ color: { color: "#111827" }, runs: [{ text: "Header", font: { color: "#FFFFFF" } }] }, { runs: [{ text: "Value" }] }],
+    rows: [[{ runs: [{ text: "A" }] }, { runs: [{ text: "B" }] }]],
+  }] });
+  const columns = html.match(/grid-template-columns:minmax\(0,([\d.]+)fr\) minmax\(0,([\d.]+)fr\)/);
+  const rows = html.match(/grid-template-rows:minmax\(0,([\d.]+)fr\) minmax\(0,([\d.]+)fr\)/);
+  assert.ok(Math.abs(Number(columns[2]) / Number(columns[1]) - 5) < .0001);
+  assert.ok(Math.abs(Number(rows[2]) / Number(rows[1]) - 2) < .0001);
+  assert.match(html, /#111827|17,24,39/);
+  const table = importer.adaptTemplateV2LayoutToSlide({ id: "source-table", elements: [{ type: "table", columns: [{ runs: [{ text: "Header" }] }, { runs: [{ text: "Value" }] }], rows: [[{ runs: [{ text: "A" }] }, { runs: [{ text: "B" }] }]], column_widths: [100, 500], row_heights: [60, 120] }] }).elements[0];
+  assert.deepEqual(table.column_widths, [100, 500]);
+  assert.deepEqual(table.row_heights, [60, 120]);
+});

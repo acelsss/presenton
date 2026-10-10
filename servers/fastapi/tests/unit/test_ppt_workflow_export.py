@@ -117,6 +117,72 @@ def test_restart_scan_preserves_durable_work_and_resumes_pages(tmp_path):
     asyncio.run(run())
 
 
+def test_cancelled_export_resumes_same_snapshot_and_fences_old_renderer(tmp_path, monkeypatch):
+    import services.agent_tools.workflow_worker as worker
+    async def run():
+        async with database(tmp_path) as (sessions, owners):
+            client = WorkflowClient(sessions, owners[0].owner)
+            result, queued, task_id = await queue_export(client)
+            entered = [asyncio.Event(), asyncio.Event()]
+            finish = [asyncio.Event(), asyncio.Event()]
+            snapshots, claims = [], []
+            async def render(owner, task, claim, snapshot, formats):
+                attempt = len(snapshots)
+                snapshots.append(copy.deepcopy(snapshot))
+                claims.append(claim)
+                entered[attempt].set()
+                await finish[attempt].wait()
+                return {"exports": {fmt: {"status": "completed", "url": f"attempt-{attempt}"}
+                                    for fmt in formats}, "previews": []}
+            monkeypatch.setattr(worker, "render_snapshot", render)
+            old_worker = asyncio.create_task(export_one(sessions, client.owner, task_id))
+            await asyncio.wait_for(entered[0].wait(), 5)
+            await client.call("task", inputs.Task(taskRef=queued["taskRef"], action="cancel"))
+            # A later manuscript change must not alter the resumed snapshot.
+            read = await client.call("read_for_edit", inputs.Read(documentId=result["documentId"]))
+            await client.call("edit", inputs.Edit(editRef=read["editRef"], operations=[{
+                "tool": "updateElement", "arguments": {
+                    "index": 0, "elementPath": "components[0].elements[0]", "text": "After cancellation"}}]))
+            resumed = await client.call("task", inputs.Task(taskRef=queued["taskRef"], action="resume"))
+            assert resumed["status"] == "export_queued" and resumed["revision"] == queued["revision"]
+            assert resumed["taskRef"] == queued["taskRef"]
+            new_worker = asyncio.create_task(export_one(sessions, client.owner, task_id))
+            await asyncio.wait_for(entered[1].wait(), 5)
+            # Repeated resume must preserve the current worker's claim.
+            repeated = await client.call("task", inputs.Task(taskRef=queued["taskRef"], action="resume"))
+            assert repeated["status"] == "exporting"
+            finish[0].set()
+            await old_worker
+            status = await client.call("task", inputs.Task(taskRef=queued["taskRef"]))
+            assert status["status"] == "exporting" and status["exports"] == {}
+            finish[1].set()
+            await new_worker
+            done = await client.call("task", inputs.Task(taskRef=queued["taskRef"]))
+            assert done["status"] == "completed"
+            assert done["exports"]["pptx"]["url"] == "attempt-1"
+            assert snapshots[0] == snapshots[1] and claims[0] != claims[1]
+    asyncio.run(run())
+
+
+def test_cancelled_export_can_resume_before_worker_starts_but_generation_cannot(tmp_path):
+    from fastapi import HTTPException
+    async def run():
+        async with database(tmp_path) as (sessions, owners):
+            client = WorkflowClient(sessions, owners[0].owner)
+            result, queued, _ = await queue_export(client)
+            await client.call("task", inputs.Task(taskRef=queued["taskRef"], action="cancel"))
+            request = inputs.Export(documentId=result["documentId"], expectedRevision=queued["revision"], formats=["pdf", "pptx"])
+            assert (await client.call("export", request))["status"] == "cancelled"
+            await client.call("task", inputs.Task(taskRef=queued["taskRef"], action="resume"))
+            replayed = await client.call("export", request)
+            assert replayed["taskRef"] == queued["taskRef"] and replayed["status"] == "export_queued"
+            _, generation = await start(client, 1)
+            await client.call("task", inputs.Task(taskRef=generation["taskRef"], action="cancel"))
+            with pytest.raises(HTTPException, match="task_requires_new_business_decision"):
+                await client.call("task", inputs.Task(taskRef=generation["taskRef"], action="resume"))
+    asyncio.run(run())
+
+
 def test_export_failure_reports_phase_and_recovery_clears_old_errors(tmp_path, monkeypatch):
     from fastapi import HTTPException
     from services.agent_tools.workflow_worker import record_failure
@@ -157,6 +223,15 @@ def test_renderer_diagnostic_survives_python_boundary_without_page_content(tmp_p
         asyncio.run(render_snapshot(uuid.uuid4(), "test-task", "claim", {"revision": 8, "slides": []}, ["pptx"]))
     assert error.value.detail == {"code": "snapshot_render_timeout", "phase": "preview_dom"}
     assert "private content" not in caplog.text
+
+
+def test_resource_freezing_ignores_image_schema_metadata(tmp_path, monkeypatch):
+    from services.agent_tools.workflow_resources import freeze_resources
+    monkeypatch.setenv("APP_DATA_DIRECTORY", str(tmp_path))
+    snapshot = {"slides": [], "schema": {"type": "image"}, "fonts": {}}
+    result = freeze_resources(uuid.uuid4(), "schema-metadata", snapshot)
+    assert result["schema"] == snapshot["schema"]
+    assert result["assetManifest"] == {}
 
 
 def test_missing_snapshot_stops_without_regenerating_or_rewinding_the_document(tmp_path, monkeypatch):

@@ -3,6 +3,7 @@
 References serialize input acceptance. Native page changes, cursor and receipts
 share a transaction; async_tasks is the sole durable execution state.
 """
+import asyncio
 import copy
 import json
 import secrets
@@ -104,7 +105,7 @@ class WorkflowService(AgentDocumentService):
                 # Historical acceptance is not the task's current state. Read
                 # compact progress, never the potentially large frozen snapshot.
                 keys = ("taskRef", "documentId", "stage", "revision", "slots", "errors",
-                        "repairRef", "exports", "previews", "nextTry", "nextEditRef")
+                        "repairRef", "exports", "previews", "nextTry", "nextEditRef", "visualReviewRequired", "visualReviews")
                 row = (await self.session.execute(select(*[
                     AsyncTaskModel.payload[key].label(key) for key in keys
                 ]).where(AsyncTaskModel.id == ref.task_id,
@@ -148,13 +149,14 @@ class WorkflowService(AgentDocumentService):
                 "errors": p.get("errors", []), "repairRef": p.get("repairRef"),
                 "exports": p.get("exports", {}), "previews": p.get("previews", []),
                 "retryAt": p.get("nextTry"),
-                  "visualReviewRequired": bool(p.get("exports")), "editRef": p.get("nextEditRef")}
+                "visualReviewRequired": bool(p.get("visualReviewRequired") or p.get("exports")),
+                "visualReviews": p.get("visualReviews", {}), "editRef": p.get("nextEditRef")}
 
     async def task_status(self, task_ref):
         # Poll only progress fields. Frozen assets can make payload tens of MB;
         # status must neither hydrate those bytes nor reserve SQLite's writer.
         keys = ("taskRef", "documentId", "stage", "revision", "slots", "errors",
-                "repairRef", "exports", "previews", "nextTry", "nextEditRef")
+                "repairRef", "exports", "previews", "nextTry", "nextEditRef", "visualReviewRequired", "visualReviews")
         row = (await self.session.execute(select(*[
             AsyncTaskModel.payload[key].label(key) for key in keys
         ]).join(PptWorkflowRef, PptWorkflowRef.task_id == AsyncTaskModel.id).where(
@@ -174,20 +176,32 @@ class WorkflowService(AgentDocumentService):
         await self.begin()
         assets = await ExistingAssets.for_document(self.session, self.owner_id, {})
         await assets.validate([{"url": value} for value in request.asset_refs])
-        templates = list(await self.session.scalars(select(TemplateV2).where(or_(
+        accessible = or_(
             TemplateV2.owner_id == self.owner_id,
             TemplateV2.owner_id.is_(None) & TemplateV2.is_default.is_(True),
-        )).order_by(TemplateV2.id)))
-        templates = [t for t in templates if (t.layouts or {}).get("layouts")]
+        )
+        # Browse metadata first; raw layouts/components/assets for every template
+        # can dwarf the four snapshots this preparation actually needs.
+        templates = list((await self.session.execute(select(TemplateV2.id, TemplateV2.name).where(
+            accessible, TemplateV2.layouts["layouts"][0].as_string().is_not(None),
+        ).order_by(TemplateV2.id))).all())
         # Deterministic preference only; content/visual choice stays with the agent.
         style = request.style.casefold()
         templates.sort(key=lambda t: (not (style and style in (t.name + " " + t.id).casefold()), t.id))
         chosen = templates[request.template_offset:request.template_offset + 4]
+        selected = {row.id: row for row in (await self.session.execute(select(
+            TemplateV2.id, TemplateV2.name, TemplateV2.layouts, TemplateV2.theme,
+        ).where(accessible, TemplateV2.id.in_([item.id for item in chosen])))).all()}
+        frozen = [(selected[item.id], {**copy.deepcopy(selected[item.id].layouts),
+                   "name": f"custom-{item.id}"}) for item in chosen]
+        from services.agent_tools.workflow_export import asset_fingerprints
+        # At most four templates per page. File checks on mounted storage must
+        # not block the API event loop or wait for unrelated templates in series.
+        manifests = await asyncio.gather(*(asyncio.to_thread(
+            asset_fingerprints, self.owner_id, [snapshot, template.theme],
+        ) for template, snapshot in frozen))
         snapshots, candidates = {}, []
-        for template in chosen:
-            snapshot = {**copy.deepcopy(template.layouts), "name": f"custom-{template.id}"}
-            from services.agent_tools.workflow_export import asset_fingerprints
-            manifest = asset_fingerprints(self.owner_id, [snapshot, template.theme])
+        for (template, snapshot), manifest in zip(frozen, manifests):
             snapshot["_agentAssetHashes"] = manifest
             key = digest({"layout": snapshot, "theme": template.theme})
             snapshots[key] = {"id": template.id, "layout": snapshot, "theme": template.theme}
@@ -201,8 +215,35 @@ class WorkflowService(AgentDocumentService):
                 "nextTemplateOffset": request.template_offset + 4 if len(templates) > request.template_offset + 4 else None,
                 "documentCreated": False}
 
+    async def preview(self, request):
+        # Read-only preview also supports preparations created before preview metadata existed.
+        ref = (await self.session.execute(select(
+            PptWorkflowRef.data["templates"][request.template_ref]["id"].as_string(),
+        ).where(
+            PptWorkflowRef.id == request.preparation_ref,
+            PptWorkflowRef.owner_id == self.owner_id, PptWorkflowRef.kind == "prepare"))).one_or_none()
+        if ref is None:
+            fail(404, "workflow_reference_not_found")
+        selected = ref[0]
+        if selected is None:
+            fail(404, "template_not_in_preparation")
+        template = (await self.session.execute(select(TemplateV2.assets["thumbnail"].as_string()).where(
+            TemplateV2.id == selected, or_(TemplateV2.owner_id == self.owner_id,
+                TemplateV2.owner_id.is_(None) & TemplateV2.is_default.is_(True))))).one_or_none()
+        if template is None:
+            fail(404, "template_permission_revoked")
+        return {"thumbnail": template[0]}
+
     @timed_stage
     async def start(self, request):
+        ref = await self.ref(request.preparation_ref, {"prepare"})
+        replay = await self.replay(ref, request)
+        if replay:
+            return replay
+        from services.agent_tools.workflow_export import check_asset_fingerprints
+        hashes = copy.deepcopy(ref.data["templates"].get(request.template_ref, {}).get("layout", {}).get("_agentAssetHashes", {}))
+        await self.session.rollback()
+        await asyncio.to_thread(check_asset_fingerprints, self.owner_id, hashes)
         ref = await self.ref(request.preparation_ref, {"prepare"})
         replay = await self.replay(ref, request)
         if replay:
@@ -220,8 +261,6 @@ class WorkflowService(AgentDocumentService):
         native_layouts = layouts(template["layout"])
         if len(request.layout_plan) != len(outline) or any(key not in native_layouts for key in request.layout_plan):
             fail(422, "one_available_layout_required_per_outline")
-        from services.agent_tools.workflow_export import check_asset_fingerprints
-        check_asset_fingerprints(self.owner_id, template["layout"].get("_agentAssetHashes", {}))
         state, presentation = await self.stage_document(ref.data["input"]["title"], ref.data["input"]["language"])
         for content in outline:
             await self._apply_tool(state, presentation, ToolRequest(tool="addOutline", arguments={"content": content}))
@@ -237,7 +276,8 @@ class WorkflowService(AgentDocumentService):
         task.payload = {"documentId": str(presentation.id), "taskRef": task_ref.id,
                         "actor": self.actor,
                         "revision": 1, "stage": "awaiting_content", "slots": slots,
-                        "finish": False, "exportFormats": [],
+                        "finish": False, "exportFormats": [], "deadline": await self.now() + DEADLINE_SECONDS,
+                        "visualReviewRequired": request.visual_review_required, "visualReviews": {},
                         "finalizeOperationId": str(uuid.uuid4()), "repairRef": edit_ref.id}
         state.workflow_task_id = task.id
         self.session.add(task)
@@ -257,6 +297,11 @@ class WorkflowService(AgentDocumentService):
 
     @timed_stage
     async def submit(self, request):
+        from services.agent_tools.workflow_export import asset_fingerprints
+        # Hash only changed candidates, before reserving the SQLite writer.
+        await self.session.rollback()
+        candidate_hashes = {page.slot_id: await asyncio.to_thread(asset_fingerprints, self.owner_id, page.content)
+                            for page in request.pages}
         source = await self.ref(request.task_ref or request.edit_ref, {"task", "submit", "repair"})
         if request.edit_ref and source.request_hash:
             legacy_input = request.model_dump(mode="json", exclude={"task_ref"})
@@ -275,7 +320,7 @@ class WorkflowService(AgentDocumentService):
             raise HTTPException(409, {"code": "document_completed_use_ppt_edit",
                 "documentId": p["documentId"], "nextTool": "ppt_read",
                 "message": "Generation is finished. Use ppt_read then ppt_edit to change this document; do not recreate it."})
-        if p["stage"] not in {"awaiting_content", "needs_input", "awaiting_finish"}:
+        if p["stage"] not in {"awaiting_content", "needs_input", "awaiting_finish", "queued", "saving"}:
             fail(409, "task_already_running_use_task_status")
         state, presentation = await self.document(ref.document_id)
         await self.check_task_revision(task, state)
@@ -291,8 +336,6 @@ class WorkflowService(AgentDocumentService):
                     "currentPageRevision": slots[page.slot_id].get("pageRevision", 0), "nextTool": "ppt_task"})
             slots[page.slot_id]["candidate"] = {**page.content, "__speaker_note__": page.speaker_note}
         assets = await ExistingAssets.for_document(self.session, self.owner_id, presentation.layout)
-        from services.agent_tools.workflow_export import asset_fingerprints, check_asset_fingerprints
-        check_asset_fingerprints(self.owner_id, presentation.layout.get("_agentAssetHashes", {}))
         native_layouts = layouts(presentation.layout)
         errors = []
         for slot in p["slots"]:
@@ -303,14 +346,38 @@ class WorkflowService(AgentDocumentService):
                 if request.finish or p["finish"]:
                     errors.append({"slotId": slot["slotId"], "code": "page_missing"})
                 continue
+            if slot.get("validatedHash") == digest(content) and slot["slotId"] not in candidate_hashes:
+                continue
             validator = Draft202012Validator(schema_for(native_layouts[slot["layoutId"]]))
             for error in list(validator.iter_errors(PresentationChatMemoryLayer._strip_runtime_fields(content)))[:20]:
                 errors.append({"slotId": slot["slotId"], "code": "schema_invalid",
                                "path": list(error.absolute_path), "rule": error.validator,
                                "constraint": error.validator_value})
+            # Check composition before queueing: a measured overflow or an
+            # outline cardinality conflict must be repairable by the caller.
+            from templates.v2.composition_schema import is_composition
+            raw_layout = PresentationChatMemoryLayer._raw_layout_from_payload(presentation.layout, slot["layoutId"])
+            from templates.v2.element_composition import compose_elements, is_element_composition
+            if is_element_composition(raw_layout) and not any(e["slotId"] == slot["slotId"] for e in errors):
+                from templates.v2.composition import CompositionError
+                try:
+                    compose_elements(content, raw_layout)
+                except CompositionError as exc:
+                    errors.append({"slotId": slot["slotId"], **exc.report()})
+            if is_composition(raw_layout) and not any(e["slotId"] == slot["slotId"] for e in errors):
+                from templates.v2.composition import compose, CompositionError
+                outlines = (presentation.outlines or {}).get("slides", [])
+                outline = outlines[slot["index"]].get("content", "") if slot["index"] < len(outlines) else ""
+                try:
+                    compose(content, raw_layout, outline=outline)
+                except CompositionError as exc:
+                    errors.append({"slotId": slot["slotId"], **exc.report()})
             try:
                 await assets.validate(content)
-                slot["assetHashes"] = asset_fingerprints(self.owner_id, content)
+                if slot["slotId"] in candidate_hashes:
+                    slot["assetHashes"] = candidate_hashes[slot["slotId"]]
+                if not any(error["slotId"] == slot["slotId"] for error in errors):
+                    slot["validatedHash"] = digest(content)
             except OperationRejected as exc:
                 errors.append({"slotId": slot["slotId"], "code": exc.code})
         invalid = {error["slotId"] for error in errors}
@@ -322,10 +389,16 @@ class WorkflowService(AgentDocumentService):
         p["errors"] = errors
         if errors:
             repair = await self.new_ref("repair", {"allowedSlots": list(dict.fromkeys(e["slotId"] for e in errors))}, state.id, task.id)
-            p["repairRef"], p["stage"] = repair.id, "needs_input"
+            next_slot = next((s for s in p["slots"] if not s.get("committed")), None)
+            can_save = next_slot and next_slot.get("candidate") and next_slot["slotId"] not in invalid
+            p["repairRef"], p["stage"] = repair.id, "queued" if can_save else "needs_input"
         else:
             p["repairRef"] = None
-            p["stage"] = "queued" if all(s.get("candidate") or s.get("committed") for s in p["slots"]) else "awaiting_content"
+            # Persist the available prefix immediately so the native preview can
+            # show pages while later content is still being produced. Keep native
+            # slide indices contiguous when submissions arrive out of order.
+            next_slot = next((s for s in p["slots"] if not s.get("committed")), None)
+            p["stage"] = "queued" if next_slot is None or next_slot.get("candidate") is not None else "awaiting_content"
         task.payload = copy.deepcopy(p)
         flag_modified(task, "payload")
         return await self.accept(ref, payload, self.status(task))
@@ -347,9 +420,23 @@ class WorkflowService(AgentDocumentService):
         state, presentation = await self.document(uuid.UUID(p["documentId"]))
         await self.check_task_revision(task, state)
         slot = next((s for s in p["slots"] if not s.get("committed")), None)
-        if slot:
+        if slot and slot.get("candidate") is None:
+            p["stage"] = "awaiting_content"
+        elif slot and any(error.get("slotId") == slot["slotId"] for error in p.get("errors", [])):
+            p["stage"] = "needs_input"
+        elif slot:
             from services.agent_tools.workflow_export import check_asset_fingerprints
-            check_asset_fingerprints(self.owner_id, slot.get("assetHashes", {}))
+            expected_revision, expected_slot, document_id = state.revision, digest(slot), state.id
+            expected_assets = copy.deepcopy(slot.get("assetHashes", {}))
+            await self.session.rollback()
+            await asyncio.to_thread(check_asset_fingerprints, self.owner_id, expected_assets)
+            task = await self.load_task(task_id)
+            p = task.payload
+            state, presentation = await self.document(document_id)
+            slot = next((s for s in p["slots"] if not s.get("committed")), None)
+            if state.revision != expected_revision or not slot or digest(slot) != expected_slot or p["stage"] not in {"queued", "saving"}:
+                return self.status(task)
+            await self.check_task_revision(task, state)
             before_pages = await self.page_fingerprints(state.id)
             await self._apply_tool(state, presentation, ToolRequest(tool="saveSlide", arguments={
                 "index": slot["index"], "layoutId": slot["layoutId"],
@@ -368,26 +455,50 @@ class WorkflowService(AgentDocumentService):
                                    {"status": "applied", "revision": state.revision, "slideId": str(slide.id)})
             p["stage"] = "saving"
         elif p["finish"]:
+            if p.get("visualReviewRequired"):
+                from services.agent_tools.workflow_visual import pending_reviews
+                pending = pending_reviews(p, presentation)
+                if pending:
+                    p["stage"] = "awaiting_finish"
+                    p["errors"] = [{"code": "visual_review_required", "slideId": key} for key in pending]
+                    p["revision"] = state.revision
+                    task.payload = copy.deepcopy(p)
+                    flag_modified(task, "payload")
+                    await self.session.commit()
+                    return self.status(task)
+            saved_assets = {url: value for saved in p["slots"] for url, value in saved.get("assetHashes", {}).items()}
+            snapshot_file, export_error = None, None
+            if p["exportFormats"]:
+                from services.agent_tools.workflow_export import freeze_snapshot, store_snapshot
+                expected_revision, expected_payload, document_id = state.revision, digest(p), state.id
+                try:
+                    snapshot = await freeze_snapshot(self, document_id, saved_assets, task_id=task_id)
+                    snapshot["revision"] = expected_revision + 1
+                    snapshot_file = await asyncio.to_thread(store_snapshot, self.owner_id, task_id, snapshot)
+                except HTTPException as exc:
+                    export_error = exc.detail if isinstance(exc.detail, dict) else {"code": "export_snapshot_failed"}
+                    await self.session.rollback()
+                task = await self.load_task(task_id)
+                p = task.payload
+                state, presentation = await self.document(document_id)
+                if state.revision != expected_revision or digest(p) != expected_payload:
+                    return self.status(task)
+                await self.check_task_revision(task, state)
             await self._apply_tool(state, presentation, ToolRequest(tool="completeDocument"))
             state.revision += 1
             await self.add_receipt(p["finalizeOperationId"], state.id, {"finish": True}, {"revision": state.revision})
             state.workflow_task_id = None
             p["stage"] = "export_queued" if p["exportFormats"] else "completed"
-            saved_assets = {url: value for saved in p["slots"] for url, value in saved.get("assetHashes", {}).items()}
             if p["exportFormats"]:
                 p["deadline"] = await self.now() + DEADLINE_SECONDS
-                from services.agent_tools.workflow_export import freeze_snapshot, check_asset_fingerprints, store_snapshot
-                try:
-                    for saved in p["slots"]:
-                        check_asset_fingerprints(self.owner_id, saved.get("assetHashes", {}))
-                    snapshot = await freeze_snapshot(self, state.id, saved_assets)
-                    p["snapshotFile"] = store_snapshot(self.owner_id, task.id, snapshot)
-                except HTTPException as exc:
+                if export_error:
                     # Saving is complete even if assets prevent export. Let the
                     # user read/fix that committed draft instead of trapping it.
                     p["stage"] = "export_input_error"
-                    p["errors"] = [exc.detail if isinstance(exc.detail, dict) else {"code": "export_snapshot_failed"}]
+                    p["errors"] = [export_error]
                     task.status = AsyncTaskStatus.ERROR
+                else:
+                    p["snapshotFile"] = snapshot_file
             else:
                 task.status = AsyncTaskStatus.COMPLETED
             next_ref = await self.new_ref("edit", {"revision": state.revision, "assetHashes": saved_assets}, state.id)
@@ -486,11 +597,29 @@ class WorkflowService(AgentDocumentService):
         state, _ = await self.document(request.document_id)
         payload = {"documentId": str(state.id),
                    "pageEdits": [page.model_dump(mode="json") for page in request.page_edits]}
+        if request.task_ref:
+            payload["taskRef"] = request.task_ref
         ref = await self.action_ref("page_edit_action", str(state.id), payload, state.id)
         replay = await self.replay(ref, payload)
         if replay:
             return replay
-        self.check_edit_revision(state, state.revision)
+        review_task = None
+        if request.task_ref:
+            from services.agent_tools.workflow_visual import target, theme_identity
+            review_task, _, presentation = await target(self, request.task_ref)
+            if review_task.payload["documentId"] != str(state.id):
+                fail(404, "workflow_reference_not_found")
+            allowed = {s["slideId"] for s in review_task.payload["slots"] if s.get("committed")}
+            if any(str(page.slide_id) not in allowed for page in request.page_edits):
+                fail(422, "review_edit_requires_saved_page")
+            for page in request.page_edits:
+                previous = review_task.payload.get("visualReviews", {}).get(str(page.slide_id), {})
+                if (previous.get("verdict") != "needs_changes" or previous.get("attempt", 0) >= 3
+                        or previous.get("pageRevision") != page.expected_page_revision
+                        or previous.get("themeIdentity") != theme_identity(presentation)):
+                    fail(409, "visual_repair_not_authorized")
+        else:
+            self.check_edit_revision(state, state.revision)
         slides = {slide.id: slide for slide in await self.slides(state.id)}
         revisions = await self.page_revisions(state.id)
         operations = []
@@ -516,8 +645,15 @@ class WorkflowService(AgentDocumentService):
                 operations.append(ToolRequest(tool=operation.tool, arguments=args))
         result = await self.mutate(state.id, None, BatchMutation(
             operationId=uuid.uuid5(uuid.NAMESPACE_URL, ref.id), expectedRevision=state.revision,
-            operations=operations), commit=False)
+            operations=operations), commit=False, review_task_id=review_task.id if review_task else None)
         latest = await self.page_revisions(state.id)
+        if review_task:
+            p = review_task.payload
+            p["revision"] = state.revision
+            for slot in p["slots"]:
+                if slot.get("slideId"):
+                    slot["pageRevision"] = latest.get(uuid.UUID(slot["slideId"]), slot["pageRevision"])
+            flag_modified(review_task, "payload")
         return await self.accept(ref, payload, {"status": result["status"], "documentId": str(state.id),
             "revision": result["revision"], "pages": [{"slideId": str(page.slide_id),
                 "pageRevision": latest.get(page.slide_id, 0)} for page in request.page_edits], "result": result["result"]})
@@ -537,10 +673,18 @@ class WorkflowService(AgentDocumentService):
             return replay
         self.check_edit_revision(state, revision)
         from services.agent_tools.workflow_export import freeze_snapshot, store_snapshot
-        snapshot = await freeze_snapshot(self, state.id, legacy.data.get("assetHashes") if legacy else None)
         task = AsyncTaskModel(owner_id=self.owner_id, type=TASK_TYPE, status=AsyncTaskStatus.PENDING)
+        document_id = state.id
+        snapshot = await freeze_snapshot(self, document_id, legacy.data.get("assetHashes") if legacy else None, task_id=task.id)
+        snapshot_file = await asyncio.to_thread(store_snapshot, self.owner_id, task.id, snapshot)
+        # Resource preparation may overlap human edits or another identical export.
+        state, _ = await self.document(document_id)
+        ref = await self.action_ref("export_action", str(state.id), payload, state.id)
+        replay = await self.replay(ref, payload)
+        if replay:
+            return replay
+        self.check_edit_revision(state, revision)
         task_ref = await self.new_ref("task", {}, state.id, task.id)
-        snapshot_file = store_snapshot(self.owner_id, task.id, snapshot)
         task.payload = {"documentId": str(state.id), "taskRef": task_ref.id,
                         "actor": self.actor, "revision": state.revision, "stage": "export_queued",
                         "snapshotFile": snapshot_file, "exportFormats": payload["formats"],
@@ -568,6 +712,13 @@ class WorkflowService(AgentDocumentService):
             p["claim"] = None
             task.status = AsyncTaskStatus.ERROR
         elif request.action == "resume":
+            if p["stage"] == "cancelled" and (p.get("snapshotFile") or p.get("snapshot")):
+                # Explicitly resume only the frozen export, never cancelled page
+                # generation. A fresh claim fences any renderer still finishing.
+                await self.document(ref.document_id)
+                p.update(stage="export_queued", claim=None, attempts=0, nextTry=0,
+                         errors=[], deadline=await self.now() + DEADLINE_SECONDS)
+                task.status = AsyncTaskStatus.PENDING
             if p["stage"] in {"cancelled", "needs_rebase", "deleted", "expired", "export_input_error"}:
                 fail(409, "task_requires_new_business_decision")
             if p["stage"] == "lease_lost":

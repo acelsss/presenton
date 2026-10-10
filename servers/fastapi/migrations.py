@@ -39,7 +39,8 @@ REVISION_LEGACY_AGENT_JOBS = "17a9c2e4f6b8"
 REVISION_LEGACY_AGENT_PLANNING = "29b8d3a6c1e0"
 REVISION_AGENT_MERGE = "c8e025a4b731"
 REVISION_WORKFLOW = "d9f136b5c842"
-REVISION_HEAD = "e1a247c6d953"
+REVISION_PAGE_VERSIONS = "e1a247c6d953"
+REVISION_HEAD = "f2b358d7ea64"
 
 
 async def migrate_database_on_startup() -> None:
@@ -151,7 +152,9 @@ def _infer_revision_from_schema(
             if agent_tables.issubset(tables) and "presentations" in tables and _has_column(inspector, "presentations", "agent_managed"):
                 if legacy_planning_ready:
                     if "ppt_workflow_refs" in tables and _has_column(inspector, "agent_documents", "workflow_task_id"):
-                        return REVISION_HEAD if "agent_page_revisions" in tables else REVISION_WORKFLOW
+                        if "template_pack_versions" in tables and "agent_page_revisions" in tables:
+                            return REVISION_HEAD
+                        return REVISION_PAGE_VERSIONS if "agent_page_revisions" in tables else REVISION_WORKFLOW
                     return REVISION_AGENT_MERGE
                 return REVISION_AGENT_DOCUMENTS
             if legacy_planning_ready:

@@ -8,7 +8,7 @@ import { addToHistory } from '@/store/slices/undoRedoSlice';
 import type { PresentationData } from '@/store/slices/presentationGeneration';
 import type { Slide } from '../../types/slide';
 import type { AutoSaveSnapshot } from '../utils/autoSaveDiff';
-import { acknowledgeEditorPage, editorDocumentArguments, editorMetadataChanges, type EditorCoordination } from '../utils/editorCoordination';
+import { acknowledgeEditorPage, editorDocumentArguments, editorMetadataChanges, isEditorReadOnly, type EditorCoordination } from '../utils/editorCoordination';
 import {
     createAutoSaveSnapshot,
     fingerprintValue,
@@ -33,6 +33,7 @@ export const useAutoSave = ({
     const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const acknowledgedDataRef = useRef<AutoSaveSnapshot | null>(null);
     const coordinationRef = useRef<EditorCoordination | null>(null);
+    const coordinationSourceRef = useRef<{ id: string; value: PresentationData['coordination'] } | null>(null);
     const conflictRef = useRef(false);
     const latestDataRef = useRef<PresentationData | null>(presentationData);
     const autoSavePausedRef = useRef(true);
@@ -43,7 +44,7 @@ export const useAutoSave = ({
     const [isSaving, setIsSaving] = useState<boolean>(false);
 
     const autoSavePaused =
-        !enabled || isStreaming || isLoading || isLayoutLoading || presentationData?.coordination?.writable === false;
+        !enabled || isLoading || isLayoutLoading || isEditorReadOnly(presentationData, isStreaming);
 
     useEffect(() => {
         latestDataRef.current = presentationData;
@@ -172,6 +173,18 @@ export const useAutoSave = ({
     useEffect(() => {
         if (!presentationData) return;
 
+        // Local edits retain Redux's coordination object. Only a hydrated payload
+        // (or a different deck) replaces it; pausing must not rewind save receipts.
+        const source = coordinationSourceRef.current;
+        if (source?.id !== presentationData.id || source.value !== presentationData.coordination) {
+            coordinationSourceRef.current = { id: presentationData.id, value: presentationData.coordination };
+            coordinationRef.current = presentationData.coordination ?? null;
+            conflictRef.current = false;
+            // Accepted server hydration is already saved. The host bridge only
+            // applies it while clean, including text edits not yet in Redux.
+            if (!isSavingRef.current) acknowledgedDataRef.current = createAutoSaveSnapshot(presentationData);
+        }
+
         if (autoSavePaused) {
             // Changes arriving while editing is paused are server-originated
             // hydration/streaming updates and are already persisted.
@@ -179,8 +192,6 @@ export const useAutoSave = ({
             pendingSaveRef.current = false;
             if (!isSavingRef.current) {
                 acknowledgedDataRef.current = createAutoSaveSnapshot(presentationData);
-                coordinationRef.current = presentationData.coordination ?? null;
-                conflictRef.current = false;
             }
             if (saveTimeoutRef.current) {
                 clearTimeout(saveTimeoutRef.current);
@@ -202,8 +213,6 @@ export const useAutoSave = ({
             // already persisted instead of issuing slide updates for it.
             wasAutoSavePausedRef.current = false;
             acknowledgedDataRef.current = createAutoSaveSnapshot(presentationData);
-            coordinationRef.current = presentationData.coordination ?? null;
-            conflictRef.current = false;
             if (saveTimeoutRef.current) {
                 clearTimeout(saveTimeoutRef.current);
                 saveTimeoutRef.current = null;
@@ -243,5 +252,19 @@ export const useAutoSave = ({
     
     return {
         isSaving,
+        flush: saveLatest,
+        getStatus: () => {
+            const data = latestDataRef.current;
+            const acknowledged = acknowledgedDataRef.current;
+            const changes = data && acknowledged ? getAutoSaveChanges(acknowledged, data) : null;
+            const active = document.activeElement;
+            const editing = active instanceof HTMLElement && (active.isContentEditable
+                || active instanceof HTMLTextAreaElement
+                || active instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'file'].includes(active.type));
+            return { ready: !!data && !!acknowledged,
+                dirty: editing || !!changes && (changes.structuralChange || changes.metadataChanged || changes.changedSlides.length > 0),
+                saving: isSavingRef.current, conflict: conflictRef.current,
+                revision: coordinationRef.current?.revision ?? 0 };
+        },
     };
 };

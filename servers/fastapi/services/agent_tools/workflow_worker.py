@@ -17,6 +17,54 @@ from services.agent_tools.workflow import TASK_TYPE, WorkflowService
 from services.agent_tools.workflow_export import render_snapshot, render_error, load_snapshot
 
 LOGGER = logging.getLogger(__name__)
+_wake = None
+_exports = {}
+_export_limit = asyncio.Semaphore(2)
+
+
+def wake_worker():
+    if _wake is not None:
+        _wake.set()
+
+
+async def renderer_lifecycle(sessions):
+    from services.agent_tools.generation_renderer import generation_renderers
+    from services.agent_tools.workflow_visual import ACTIVE
+    async with sessions() as session:
+        rows = (await session.execute(select(AsyncTaskModel.id, AsyncTaskModel.owner_id,
+            AsyncTaskModel.payload["stage"].as_string(), AsyncTaskModel.payload["deadline"].as_integer())
+            .where(AsyncTaskModel.type == TASK_TYPE, AsyncTaskModel.status == AsyncTaskStatus.PENDING,
+                   AsyncTaskModel.payload["visualReviewRequired"].as_boolean().is_(True)))).all()
+    active = set()
+    for task_id, owner_id, stage, deadline in rows:
+        if stage not in ACTIVE:
+            continue
+        if deadline and deadline < time.time():
+            async with sessions() as session:
+                service = WorkflowService(session, owner_id, "worker")
+                task = await service.load_task(task_id)
+                if task.payload.get("stage") not in ACTIVE or task.payload.get("deadline", 0) >= time.time():
+                    continue
+                task.payload["stage"] = "expired"
+                task.status = AsyncTaskStatus.ERROR
+                state, _ = await service.document(uuid.UUID(task.payload["documentId"]))
+                if state.workflow_task_id == task.id:
+                    state.workflow_task_id = None
+                flag_modified(task, "payload")
+                await session.commit()
+            continue
+        key = (str(owner_id), str(task_id))
+        active.add(key)
+        if key not in generation_renderers.sessions:
+            pending = asyncio.create_task(generation_renderers.get(owner_id, task_id))
+            pending.add_done_callback(lambda value: value.exception() if not value.cancelled() else None)
+    await asyncio.gather(*(generation_renderers.close(*key)
+                          for key in list(generation_renderers.sessions) if key not in active))
+
+
+async def background_export(sessions, owner_id, task_id):
+    async with _export_limit:
+        await export_one(sessions, owner_id, task_id)
 
 
 async def record_failure(sessions, owner_id, task_id, exc, *, cursor=None, claim=None):
@@ -110,7 +158,8 @@ async def export_one(sessions, owner_id, task_id):
         await session.commit()
     try:
         if snapshot_file:
-            snapshot = load_snapshot(owner_id, task_id, snapshot_file)
+            snapshot = await asyncio.to_thread(load_snapshot, owner_id, task_id, snapshot_file)
+            snapshot["_snapshotFile"] = snapshot_file
         result = await render_snapshot(owner_id, task_id, claim_id, snapshot, formats)
     except Exception as exc:
         await record_failure(sessions, owner_id, task_id, exc, claim=claim_id)
@@ -138,7 +187,10 @@ async def export_one(sessions, owner_id, task_id):
         await session.commit()
 
 
-async def sweep(sessions):
+async def sweep(sessions, *, background_exports=False):
+    for key, pending in list(_exports.items()):
+        if pending.done():
+            _exports.pop(key)
     async with sessions() as session:
         # Do not scan full candidate/snapshot JSON, or let idle drafts starve work.
         stage_column = AsyncTaskModel.payload["stage"].as_string()
@@ -151,18 +203,40 @@ async def sweep(sessions):
             if stage in {"queued", "saving"}:
                 await drive(sessions, owner_id, task_id)
             elif stage in {"export_queued", "exporting"}:
-                await export_one(sessions, owner_id, task_id)
+                if background_exports:
+                    previous = _exports.get(task_id)
+                    if previous is None or previous.done():
+                        _exports[task_id] = asyncio.create_task(background_export(sessions, owner_id, task_id))
+                        _exports[task_id].add_done_callback(lambda value: value.exception() if not value.cancelled() else None)
+                else:
+                    await export_one(sessions, owner_id, task_id)
         except Exception as exc:
             await record_failure(sessions, owner_id, task_id, exc)
 
 
 async def worker_loop(sessions, stop):
-    while not stop.is_set():
-        try:
-            await sweep(sessions)
-        except Exception as exc:
-            LOGGER.warning("[ppt_workflow] scan_failed error_type=%s", type(exc).__name__)
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=1)
-        except TimeoutError:
-            pass
+    global _wake
+    _wake = asyncio.Event()
+    try:
+        while not stop.is_set():
+            _wake.clear()
+            try:
+                await renderer_lifecycle(sessions)
+                await sweep(sessions, background_exports=True)
+            except Exception as exc:
+                LOGGER.warning("[ppt_workflow] scan_failed error_type=%s", type(exc).__name__)
+            waiting = [asyncio.create_task(stop.wait()), asyncio.create_task(_wake.wait())]
+            try:
+                await asyncio.wait(waiting, timeout=1, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for pending in waiting:
+                    pending.cancel()
+                await asyncio.gather(*waiting, return_exceptions=True)
+    finally:
+        from services.agent_tools.generation_renderer import generation_renderers
+        _wake = None
+        for pending in _exports.values():
+            pending.cancel()
+        await asyncio.gather(*_exports.values(), return_exceptions=True)
+        _exports.clear()
+        await generation_renderers.close_all()

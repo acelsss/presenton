@@ -9,7 +9,7 @@ const escape = value => String(value).replaceAll("&", "&amp;").replaceAll('"', "
 
 export async function renderSnapshot(task, options) {
   const started = Date.now();
-  const browser = await puppeteer.launch({headless: true, ...options.browserLaunchOptions,
+  const browser = options.browser || await puppeteer.launch({headless: true, ...options.browserLaunchOptions,
     args: ["--no-sandbox", "--disable-gpu"]});
   const out = task.outputDirectory;
   await fs.mkdir(out, {recursive: true});
@@ -19,15 +19,21 @@ export async function renderSnapshot(task, options) {
     if (secured.has(page)) return secured.get(page);
     const ready = (async () => {
       await page.setRequestInterception(true);
-      page.on("request", request => /^(data:|about:|blob:)/.test(request.url()) ? request.continue() : request.abort());
+      page.on("request", request => {
+        const asset = options.assets?.get(request.url());
+        if (asset) void request.respond({status: 200, contentType: asset.mime,
+          headers: {"Cache-Control": "private, max-age=31536000, immutable", "Access-Control-Allow-Origin": "*"}, body: asset.bytes}).catch(() => {});
+        else void (/^(data:|about:|blob:)/.test(request.url()) ? request.continue() : request.abort()).catch(() => {});
+      });
     })();
     secured.set(page, ready);
     return ready;
   };
-  browser.on("targetcreated", async target => {
+  const secureTarget = async target => {
     const page = await target.page();
     if (page) await securePage(page);
-  });
+  };
+  browser.on("targetcreated", secureTarget);
   const opts = {...options, outputDirectory: out, getBrowser: () => browser};
   const phases = [];
   const timed = async (phase, action, slideIndex = null) => {
@@ -65,9 +71,10 @@ export async function renderSnapshot(task, options) {
     // Theme values enter CSS, not HTML or JavaScript.
     const colors = Object.entries(theme.colors ?? {}).filter(([key, value]) => /^[a-z0-9_]+$/i.test(key) && /^(#[a-f0-9]{3,8}|rgba?\([\d\s.,%/]+\)|hsla?\([\d\s.,%/]+\)|[a-z]+)$/i.test(value));
     const variables = colors.map(([key, value]) => `--${colorKeys[key] ?? key.replaceAll("_", "-")}:${value}`).join(";");
-    const fonts = Object.values(theme.fonts ?? {}).filter(font => font?.url?.startsWith("data:"));
+    const fontUrl = url => typeof url === "string" && (url.startsWith("data:") || options.assets?.has(url));
+    const fonts = Object.values(theme.fonts ?? {}).filter(font => fontUrl(font?.url));
     for (const [name, url] of Object.entries(doc.fonts ?? {})) {
-      if (typeof url === "string" && url.startsWith("data:")) fonts.push({name, url});
+      if (fontUrl(url)) fonts.push({name, url});
     }
     const family = value => String(value ?? "sans-serif").replaceAll(/[^\p{L}\p{N} _-]/gu, "");
     const fontCss = fonts.map(font => `@font-face{font-family:'${family(font.name)}';src:url('${font.url}')}`).join("\n");
@@ -78,8 +85,16 @@ export async function renderSnapshot(task, options) {
       #presentation-slides-wrapper{width:1280px}
       .main-slide{position:relative;width:1280px;height:720px;overflow:hidden;break-after:page}
       @page{size:1280px 720px;margin:0}
+      @media print{
+        /* Individual slide HTML clips its root to one viewport. The merged
+           document must expose every section to Chromium's page formatter. */
+        html,body{height:auto!important;overflow:visible!important}
+        #presentation-slides-wrapper{display:block;height:auto;overflow:visible}
+        .main-slide{break-inside:avoid}
+        .main-slide:last-child{break-after:auto}
+      }
       </style></head><body><div id="presentation-slides-wrapper">${parts.join("\n")}</div></body></html>`;
-    await fs.writeFile(path.join(out, "presentation.html"), html);
+    if (!task.previewOnly) await fs.writeFile(path.join(out, "presentation.html"), html);
     const page = await browser.newPage();
     await securePage(page);
     await page.setViewport({width:1280, height:720});
@@ -96,6 +111,7 @@ export async function renderSnapshot(task, options) {
       });
       await page.waitForFunction(() => window.__snapshotAssetsReady || window.__snapshotAssetsFailed, {timeout: 30000});
       if (await page.evaluate(() => window.__snapshotAssetsFailed)) throw new Error("snapshot_asset_decode_failed");
+      if (await page.evaluate(() => [...document.fonts].some(font => font.status === "error"))) throw new Error("snapshot_font_load_failed");
     });
     const slides = await page.$$("#presentation-slides-wrapper > section");
     const geometry = [];
@@ -115,24 +131,36 @@ export async function renderSnapshot(task, options) {
         return {overflows, brokenImages: [...el.querySelectorAll("img")].filter(img => !img.complete || !img.naturalWidth).length};
       }));
     }
-    await page.close();
     await fs.writeFile(path.join(out, "geometry.json"), JSON.stringify(geometry));
     const formats = {}, errors = {};
     for (const format of task.formats) {
       try {
-        const result = await timed(`export_${format}`, () => runTask({type:"html-to-any", html, format, title:doc.title}, opts));
-        await fs.copyFile(result.filePath, path.join(out, `presentation.${format}`));
+        if (format === "pdf") {
+          // export-core's generic HTML PDF path fits the full document on one
+          // long sheet. A deck uses fixed-size CSS pages and the already-ready DOM.
+          await timed("export_pdf", () => page.pdf({path: path.join(out, "presentation.pdf"),
+            width: "1280px", height: "720px", preferCSSPageSize: true, printBackground: true,
+            margin: {top: 0, right: 0, bottom: 0, left: 0}}));
+        } else {
+          const result = await timed(`export_${format}`, () => runTask({type:"html-to-any", html, format, title:doc.title}, opts));
+          await fs.copyFile(result.filePath, path.join(out, `presentation.${format}`));
+        }
         formats[format] = "completed";
       } catch (error) {
         formats[format] = "error";
         errors[format] = error.snapshotFailure ?? {code: "snapshot_render_failed", phase: `export_${format}`};
       }
     }
+    await page.close();
     await fs.writeFile(path.join(out, "timing.json"), JSON.stringify({renderTimes, phases, totalMs:Date.now() - started, revision:doc.revision}));
     return {formats, errors, phases};
   } catch (error) {
     return {error: error.snapshotFailure ?? {code: "snapshot_render_failed", phase: "snapshot"}, phases};
   } finally {
-    await browser.close();
+    browser.off("targetcreated", secureTarget);
+    // A failed page must not leak into another request on the same browser.
+    const pages = await browser.pages();
+    for (const page of pages) if (page.url() !== "about:blank" || pages.length > 1) await page.close().catch(() => {});
+    if (!options.browser) await browser.close();
   }
 }

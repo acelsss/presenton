@@ -1,6 +1,6 @@
 export const TAILWIND_BROWSER_VERSION = "4.3.3";
 export const TAILWIND_BROWSER_SCRIPT_URL =
-  `/vendor/tailwindcss-browser-${TAILWIND_BROWSER_VERSION}.js`;
+  (process.env.NEXT_PUBLIC_HOST_ASSET_PREFIX || "") + `/vendor/tailwindcss-browser-${TAILWIND_BROWSER_VERSION}.js`;
 
 export const TAILWIND_BROWSER_STYLE_CONTENT = `
 @import "tailwindcss/theme";

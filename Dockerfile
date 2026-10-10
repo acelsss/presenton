@@ -21,6 +21,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && uv pip install --python /opt/venv/bin/python -r /tmp/requirements.txt
 
 COPY servers/fastapi /app/servers/fastapi
+COPY scripts/write-source-manifest.py /app/scripts/write-source-manifest.py
+RUN python /app/scripts/write-source-manifest.py /app /app/python-source-manifest.json servers/fastapi
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/venv/bin/python --no-deps .
 # Native Mem0 uses spaCy; external-agent builds do not need its language model.
@@ -35,18 +37,33 @@ ENV HF_HOME=/root/.cache/huggingface \
 # Warm FastEmbed caches into the image (not a BuildKit cache mount, or HF weights would be missing).
 RUN /opt/venv/bin/python scripts/warm_fastembed_cache.py
 
+# External-agent mode always disables Mem0. Keep its NLP dependencies and
+# precompiled bytecode out of that runtime image; normal builds retain both.
+RUN case "$(printf '%s' "$PRESENTON_EXTERNAL_AGENT" | tr '[:upper:]' '[:lower:]')" in \
+      1|true) uv pip uninstall --python /opt/venv/bin/python spacy thinc blis \
+        && find /opt/venv -type f -name '*.pyc' -delete ;; \
+      *) ;; \
+    esac
+
 
 FROM node:22-bookworm-slim AS nextjs-builder
 
 WORKDIR /app/servers/nextjs
 
+ARG PRESENTON_HOST_ASSET_PREFIX=""
+ARG NEXT_PUBLIC_HOST_ASSET_PREFIX=""
+
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV PRESENTON_HOST_ASSET_PREFIX=${PRESENTON_HOST_ASSET_PREFIX} \
+    NEXT_PUBLIC_HOST_ASSET_PREFIX=${NEXT_PUBLIC_HOST_ASSET_PREFIX}
 
 COPY servers/nextjs/package.json servers/nextjs/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci
 
 COPY servers/nextjs /app/servers/nextjs
+COPY scripts/write-frontend-manifest.mjs /app/scripts/write-frontend-manifest.mjs
+RUN node /app/scripts/write-frontend-manifest.mjs
 RUN npm run build \
     && rm -rf .next-build/cache
 
@@ -70,6 +87,8 @@ COPY electron/resources/document-extraction/liteparse_runner.mjs /app/document-e
 COPY scripts/sync-presentation-export.cjs /app/scripts/sync-presentation-export.cjs
 COPY scripts/run-presentation-export.mjs /app/scripts/run-presentation-export.mjs
 COPY scripts/snapshot-export.mjs /app/scripts/snapshot-export.mjs
+COPY scripts/snapshot-input.mjs /app/scripts/snapshot-input.mjs
+COPY scripts/render-session.mjs /app/scripts/render-session.mjs
 RUN rm -rf /app/presentation-export \
     && node /app/scripts/sync-presentation-export.cjs --force
 
@@ -81,6 +100,7 @@ ARG PRESENTON_EXTERNAL_AGENT
 WORKDIR /app
 
 ARG INSTALL_TESSERACT=true
+ARG INSTALL_EXTENDED_FONTS=true
 ARG CHROMIUM_VERSION=149.0.7827.196-1~deb13u1
 ARG CHROMIUM_SNAPSHOT=20260625T180000Z
 
@@ -101,13 +121,16 @@ RUN set -eux; \
     printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99snapshot; \
     printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/%s trixie-security main\n' "$CHROMIUM_SNAPSHOT" > /etc/apt/sources.list.d/chromium-snapshot.list; \
     packages="ca-certificates curl nginx fontconfig imagemagick zstd \
-    fonts-liberation fonts-noto-core fonts-noto-extra fonts-noto-mono fonts-noto-ui-core fonts-noto-ui-extra \
-    fonts-noto-cjk fonts-noto-cjk-extra fonts-noto-color-emoji xdg-utils \
+    fonts-liberation fonts-noto-core fonts-noto-mono fonts-noto-ui-core \
+    fonts-noto-cjk fonts-noto-color-emoji xdg-utils \
     libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
     libcairo2 libcups2t64 libdbus-1-3 libdrm2 libexpat1 libgbm1 \
     libglib2.0-0t64 libgtk-3-0t64 libnspr4 libnss3 libpango-1.0-0 \
     libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
     libxkbcommon0 libxrandr2 libxshmfence1 libxss1 libxtst6"; \
+    if [ "$INSTALL_EXTENDED_FONTS" = "true" ]; then \
+      packages="$packages fonts-noto-extra fonts-noto-ui-extra fonts-noto-cjk-extra"; \
+    fi; \
     if [ "$INSTALL_TESSERACT" = "true" ]; then packages="$packages tesseract-ocr tesseract-ocr-eng"; fi; \
     apt-get update; \
     apt-get install -y --no-install-recommends --allow-downgrades \
@@ -131,6 +154,8 @@ RUN mkdir -p /app_data/exports /app_data/images /app_data/uploads /app_data/font
 
 COPY --from=fastapi-builder /opt/venv /opt/venv
 COPY --from=fastapi-builder /app/servers/fastapi /app/servers/fastapi
+COPY --from=fastapi-builder /app/python-source-manifest.json /app/python-source-manifest.json
+COPY --from=fastapi-builder /app/scripts/write-source-manifest.py /app/scripts/write-source-manifest.py
 COPY --from=fastapi-builder /root/.cache/huggingface /root/.cache/huggingface
 COPY --from=fastapi-builder /root/.cache/presenton/fastembed-icons /root/.cache/presenton/fastembed-icons
 COPY templates /app/templates
@@ -146,11 +171,17 @@ RUN test -f /app/presentation-export/runner.mjs \
 COPY --from=nextjs-builder /app/servers/nextjs/.next-build/standalone/ /app/servers/nextjs/
 COPY --from=nextjs-builder /app/servers/nextjs/public /app/servers/nextjs/public
 COPY --from=nextjs-builder /app/servers/nextjs/.next-build/static /app/servers/nextjs/.next-build/static
+COPY --from=nextjs-builder /app/frontend-source-manifest.json /app/frontend-source-manifest.json
 
 COPY start.js LICENSE NOTICE ./
 COPY scripts/presenton-terminal-banner.mjs /app/scripts/presenton-terminal-banner.mjs
 COPY scripts/user-config-env.cjs /app/scripts/user-config-env.cjs
 COPY nginx.conf /etc/nginx/nginx.conf
+RUN /opt/venv/bin/python /app/scripts/write-source-manifest.py /app /app/runtime-source-manifest.json \
+    servers/fastapi templates presentation-export/runner.mjs presentation-export/snapshot-export.mjs \
+    presentation-export/snapshot-input.mjs presentation-export/render-session.mjs
+RUN /opt/venv/bin/python /app/scripts/write-source-manifest.py /app /app/frontend-bundle-manifest.json \
+    --include-build-output servers/nextjs
 
 EXPOSE 80
 CMD ["node", "/app/start.js"]

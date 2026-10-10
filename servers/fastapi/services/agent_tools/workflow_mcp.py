@@ -82,7 +82,9 @@ def create_workflow_mcp(api_client, *, auth=None):
 
     @server.tool()
     async def ppt_task(request: schemas.Task, ctx: Context) -> dict:
-        """Wait up to 30 seconds, resume persisted work, or cancel this same task without regenerating content."""
+        """Wait up to 30 seconds, resume persisted work, or cancel this same task without regenerating content.
+        A cancelled export can be resumed from its frozen snapshot; cancelled page generation cannot.
+        """
         return await call("task", request, ctx)
 
     @server.tool()

@@ -583,6 +583,12 @@ def _element_dict(value: Any) -> dict[str, Any] | None:
 
 
 def _template_layout_schema(layout: dict[str, Any], slide_index: int) -> dict[str, Any]:
+    from .element_composition import element_schema, is_element_composition
+    if is_element_composition(layout):
+        return {"slide": slide_index, "layout_id": layout.get("id"), "schema": element_schema(layout)}
+    from .composition_schema import composition_schema, is_composition
+    if is_composition(layout):
+        return {"slide": slide_index, "layout_id": layout.get("id"), "schema": composition_schema(layout)}
     properties: dict[str, Any] = {}
     required: list[str] = []
 

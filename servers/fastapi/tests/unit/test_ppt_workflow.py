@@ -49,6 +49,25 @@ async def complete(client, result):
     return await client.call("task", inputs.Task(taskRef=result["taskRef"]))
 
 
+def test_saves_valid_prefix_while_later_candidates_need_repair(tmp_path):
+    async def run():
+        async with database(tmp_path) as (sessions, owners):
+            client = WorkflowClient(sessions, owners[0].owner)
+            _, result = await start(client, 2)
+            candidates = pages(result)
+            candidates[1].content = {}
+            submitted = await client.call("submit", inputs.Submit(taskRef=result["taskRef"], pages=candidates))
+            assert submitted["status"] == "queued"
+            async with sessions() as session:
+                task_id = (await session.get(PptWorkflowRef, result["taskRef"])).task_id
+            await drive(sessions, client.owner, task_id, budget_seconds=10)
+            status = await client.call("task", inputs.Task(taskRef=result["taskRef"]))
+            assert status["status"] == "needs_input"
+            assert status["committed"] == [result["slots"][0]["slotId"]]
+            assert all(error["slotId"] == result["slots"][1]["slotId"] for error in status["errors"])
+    asyncio.run(run())
+
+
 def test_three_calls_and_replays_do_not_duplicate_documents_or_pages(tmp_path):
     async def run():
         async with database(tmp_path) as (sessions, owners):
@@ -177,7 +196,7 @@ def test_all_schema_errors_return_together_and_only_bad_pages_are_resent(tmp_pat
             candidates[1].content = {}
             candidates[4].content["body"]["Bullets"] = []
             submitted = await client.call("submit", inputs.Submit(editRef=result["editRef"], pages=candidates))
-            assert submitted["status"] == "needs_input"
+            assert submitted["status"] == "queued"  # The valid first page can save before later repairs.
             assert {error["slotId"] for error in submitted["errors"]} == {candidates[1].slot_id, candidates[4].slot_id}
             fixed = await client.call("submit", inputs.Submit(editRef=submitted["repairRef"], pages=[pages(result)[1], pages(result)[4]]))
             assert fixed["status"] == "queued"

@@ -500,6 +500,8 @@ export type TableCell = {
 };
 
 export type TableElement = ElementBase & {
+  column_widths?: number[] | null;
+  row_heights?: number[] | null;
   type: "table";
   font?: Font | null;
   columns: TableCell[];
