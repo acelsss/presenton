@@ -3402,7 +3402,7 @@ function tableCellStyle(
 }
 
 function textOverflowStyle(): string {
-  return "overflow:visible;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;";
+  return "overflow:visible;white-space:pre-wrap;overflow-wrap:break-word;word-break:normal;";
 }
 
 function tableCellFont(cellValue: unknown, tableFont: JsonRecord): JsonRecord {
