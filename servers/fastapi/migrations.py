@@ -34,7 +34,13 @@ REVISION_PRESENTON_CLOUD_PROVIDER = "c6e8f1a3b5d7"
 REVISION_SMART_MODE_BACKFILL = "d2f4a6b8c0e1"
 REVISION_TEMPLATE_V2_THEME = "e4c7a9b2d6f1"
 REVISION_UNIFIED_API_KEYS = "026c0ba8b35c"
-REVISION_HEAD = REVISION_UNIFIED_API_KEYS
+REVISION_AGENT_DOCUMENTS = "b7d914f3a620"
+REVISION_LEGACY_AGENT_JOBS = "17a9c2e4f6b8"
+REVISION_LEGACY_AGENT_PLANNING = "29b8d3a6c1e0"
+REVISION_AGENT_MERGE = "c8e025a4b731"
+REVISION_WORKFLOW = "d9f136b5c842"
+REVISION_PAGE_VERSIONS = "e1a247c6d953"
+REVISION_HEAD = "f2b358d7ea64"
 
 
 async def migrate_database_on_startup() -> None:
@@ -119,7 +125,7 @@ def _infer_revision_from_schema(
     tables: set[str],
     _head_revision: str,
 ) -> str:
-    """Best-effort: map existing SQLite/Postgres schema to our linear migration chain."""
+    """Best-effort: map existing SQLite/Postgres schema to known migrations."""
     owned_tables = {
         "presentations",
         "slides",
@@ -138,6 +144,24 @@ def _infer_revision_from_schema(
         for table in owned_tables
     )
     if "provider_settings" in tables and "user" in tables and ownership_ready:
+        if "api_keys" in tables and ("async_tasks" not in tables or _has_column(inspector, "async_tasks", "payload")):
+            agent_tables = {"agent_caller_sessions", "agent_documents", "agent_operation_receipts"}
+            legacy_agent_tables = {"agent_ppt_jobs", "agent_ppt_operations", "agent_ppt_editor_sessions", "agent_ppt_objects"}
+            legacy_jobs_ready = legacy_agent_tables.issubset(tables)
+            legacy_planning_ready = legacy_jobs_ready and _has_column(inspector, "agent_ppt_jobs", "planning")
+            if agent_tables.issubset(tables) and "presentations" in tables and _has_column(inspector, "presentations", "agent_managed"):
+                if legacy_planning_ready:
+                    if "ppt_workflow_refs" in tables and _has_column(inspector, "agent_documents", "workflow_task_id"):
+                        if "template_pack_versions" in tables and "agent_page_revisions" in tables:
+                            return REVISION_HEAD
+                        return REVISION_PAGE_VERSIONS if "agent_page_revisions" in tables else REVISION_WORKFLOW
+                    return REVISION_AGENT_MERGE
+                return REVISION_AGENT_DOCUMENTS
+            if legacy_planning_ready:
+                return REVISION_LEGACY_AGENT_PLANNING
+            if legacy_jobs_ready:
+                return REVISION_LEGACY_AGENT_JOBS
+            return REVISION_UNIFIED_API_KEYS
         if "template_v2" in tables and _has_column(
             inspector, "template_v2", "theme"
         ):

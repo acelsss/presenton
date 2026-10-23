@@ -275,6 +275,8 @@ class Table(BaseModel):
     rotation: Optional[float] = None
     columns: list[TableCell]
     rows: list[list[TableCell]]
+    column_widths: Optional[list[Annotated[float, Field(gt=0)]]] = None
+    row_heights: Optional[list[Annotated[float, Field(gt=0)]]] = None
 
     # Schema
     decorative: bool

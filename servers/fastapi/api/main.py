@@ -15,6 +15,8 @@ from api.v1.mock.router import API_V1_MOCK_ROUTER
 from api.v1.ppt.router import API_V1_PPT_ROUTER
 from api.v1.webhook.router import API_V1_WEBHOOK_ROUTER
 from api.v2.router import API_V2_ROUTER
+from api.v1.agent_tools import AGENT_TOOLS_ROUTER
+from api.v1.ppt_workflow import PPT_WORKFLOW_ROUTER
 from utils.get_env import (
     get_app_data_directory_env,
     get_sentry_dsn_env,
@@ -62,6 +64,7 @@ def _maybe_init_sentry() -> None:
 _maybe_init_sentry()
 
 app = FastAPI(lifespan=app_lifespan)
+app.include_router(PPT_WORKFLOW_ROUTER)
 
 # Routers
 app.include_router(API_V1_PPT_ROUTER)
@@ -71,6 +74,7 @@ app.include_router(API_V1_AUTH_ROUTER)
 app.include_router(API_V1_ADMIN_ROUTER)
 app.include_router(API_V1_ASYNC_TASKS_ROUTER)
 app.include_router(API_V2_ROUTER)
+app.include_router(AGENT_TOOLS_ROUTER)
 
 # Mount app_data and static assets (direct FastAPI access; nginx also serves /static in Docker).
 app_data_dir = get_app_data_directory_env()
@@ -94,6 +98,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Presenton-Coordination"],
 )
 
 app.add_middleware(UserConfigEnvUpdateMiddleware)

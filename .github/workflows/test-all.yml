@@ -40,6 +40,19 @@ jobs:
   test-fastapi:
     name: Test FastAPI
     runs-on: ubuntu-latest
+    services:
+      agent-postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: presenton_agent_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d presenton_agent_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: servers/fastapi
@@ -73,6 +86,19 @@ jobs:
 
       - name: Run all pytest tests
         run: uv run --locked python -m pytest --verbose --tb=short
+
+      - name: Verify external-agent transactions on PostgreSQL
+        env:
+          PRESENTON_TEST_POSTGRES_URL: postgresql+asyncpg://postgres@localhost:5432/presenton_agent_test
+        run: >-
+          uv run --locked python -m pytest
+          tests/unit/test_agent_tools.py
+          tests/unit/test_agent_tools_api.py
+          tests/unit/test_agent_tools_postgres.py
+          tests/unit/test_ppt_workflow.py
+          tests/unit/test_ppt_workflow_api.py
+          tests/unit/test_ppt_workflow_export.py
+          --verbose --tb=short
 
   test-nextjs:
     name: Test Next.js

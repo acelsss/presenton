@@ -97,7 +97,7 @@ def test_server_side_file_resolution_allows_packaged_nextjs_fonts():
     )
 
     assert resolved is not None
-    assert resolved.endswith(
+    assert resolved.replace("\\", "/").endswith(
         "servers/nextjs/public/vendor/fonts/sans_serif/poppins/Poppins-Regular.ttf"
     )
 

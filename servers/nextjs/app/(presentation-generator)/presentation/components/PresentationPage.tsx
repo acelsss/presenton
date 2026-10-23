@@ -34,6 +34,7 @@ import {
 } from "../hooks";
 import { PresentationPageProps } from "../types";
 import { applyPresentationThemeToElement } from "../utils/applyPresentationThemeDom";
+import { isEditorReadOnly } from "../utils/editorCoordination";
 
 import { replaceSlidesWithBlankFallback } from "@/store/slices/presentationGeneration";
 import { addToHistory } from "@/store/slices/undoRedoSlice";
@@ -52,6 +53,8 @@ import {
   type TemplateV2SurfaceSelectedDetail,
 } from "@/components/slide-editor/events/events";
 import { isEditableTarget } from "@/components/slide-editor/model/core";
+import { useHostEditorBridge } from "../hooks/useHostEditorBridge";
+import HostEditorToolbar from "./HostEditorToolbar";
 
 function hasTemplateV2Layouts(layout: unknown): boolean {
   if (!layout || typeof layout !== "object") return false;
@@ -139,8 +142,9 @@ const NAVIGATION_HINT_KEYS = ["←", "↑", "↓", "→"];
 const NAVIGATION_SCROLL_THRESHOLD = 240;
 const NAVIGATION_SCROLL_WINDOW_MS = 800;
 
-const PresentationPage: React.FC<PresentationPageProps> = ({
+const PresentationPage: React.FC<PresentationPageProps & { hosted?: boolean }> = ({
   presentation_id,
+  hosted = false,
 }) => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -154,6 +158,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   const [isChatSending, setIsChatSending] = useState(false);
   const [isChatMutating, setIsChatMutating] = useState(false);
   const [isFollowModeEnabled, setIsFollowModeEnabled] = useState(true);
+  const [followGeneratedPages, setFollowGeneratedPages] = useState(true);
   const [agentFocusedSlide, setAgentFocusedSlide] = useState<number | null>(
     null
   );
@@ -177,6 +182,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   const mobileAssistantTriggerRef = useRef<HTMLButtonElement | null>(null);
   const mobileAssistantCloseRef = useRef<HTMLButtonElement | null>(null);
   const presentationCanvasRef = useRef<HTMLDivElement | null>(null);
+  const hostedToolsRef = useRef<HTMLDivElement | null>(null);
   const templateV2EditorLoadedKeyRef = useRef<string | null>(null);
   const navigationHintShownRef = useRef(false);
   const navigationHintSlideRef = useRef<number | null>(null);
@@ -199,7 +205,11 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
     presentationData?.version === "v2-standard" ||
     hasTemplateV2Layouts(presentationData?.layout) ||
     hasTemplateV2Slides(presentationData?.slides);
-  const editingDisabled = isStreaming === true;
+  const editingDisabled = isEditorReadOnly(presentationData, isStreaming);
+  const hostedPreview = hosted && editingDisabled;
+  useEffect(() => {
+    if (hostedPreview && followGeneratedPages && slidesLength > 0) setSelectedSlide(slidesLength - 1);
+  }, [hostedPreview, followGeneratedPages, slidesLength]);
 
   useEffect(() => {
     presentationDataRef.current = presentationData;
@@ -262,7 +272,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   // Pause while the chat assistant is mutating the deck: the assistant edits
   // slide.ui directly in the database, so a debounced autosave firing with the
   // pre-edit Redux state would overwrite (revert) the assistant's change.
-  const { isSaving } = useAutoSave({
+  const { isSaving, flush, getStatus } = useAutoSave({
     debounceMs: 2000,
     enabled:
       !!presentationData &&
@@ -277,6 +287,8 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
     setLoading,
     setError
   );
+  useHostEditorBridge({ enabled: hosted, selectedSlide, slideId: presentationData?.slides[selectedSlide]?.id, readOnly: editingDisabled,
+    getStatus, flush, reload: fetchUserSlides });
 
   const {
     isPresentMode,
@@ -513,6 +525,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
 
   const handleEditorSlideNavigation = useCallback(
     (index: number, options?: SlideAddedOptions) => {
+      if (hostedPreview) setFollowGeneratedPages(false);
       navigateEditorToSlide(index);
       if (!options?.promptOverlayKind || !options.promptOverlaySlideId) {
         return;
@@ -533,7 +546,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
         });
       }
     },
-    [navigateEditorToSlide],
+    [navigateEditorToSlide, hostedPreview],
   );
 
   const dismissBlankPromptOverlay = useCallback((slideId: unknown) => {
@@ -842,7 +855,13 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   }
 
   return (
-    <div className="h-dvh overflow-hidden font-syne">
+    <div className="h-dvh overflow-hidden font-syne" onPointerDownCapture={(event) => {
+      if (!hosted || !isRightPanelOpen || event.button !== 0) return;
+      const target = event.target;
+      // Portaled pickers belong to the tools even though they render outside this root.
+      if (target instanceof Node && event.currentTarget.contains(target)
+        && !hostedToolsRef.current?.contains(target)) setIsRightPanelOpen(false);
+    }}>
       <OverlayLoader
         show={loadingState.isLoading}
         text={loadingState.message}
@@ -857,14 +876,18 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
         id="presentation-slides-wrapper"
         className="relative flex h-full flex-col overflow-hidden"
       >
-        <PresentationHeader
+        {hosted ? hostedPreview ? <div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-[#eceaf0] bg-white px-4 text-xs text-[#80798c]" aria-label="生成预览工具栏">
+          <span>生成中可预览，完成后即可编辑</span>
+          <button type="button" aria-pressed={followGeneratedPages} className="shrink-0 rounded px-2 py-2 text-[#7755de]"
+            onClick={() => setFollowGeneratedPages((value) => !value)}>{followGeneratedPages ? "✓ " : ""}跟随最新页</button>
+        </div> : <HostEditorToolbar /> : <PresentationHeader
           presentation_id={presentation_id}
           isPresentationSaving={isSaving}
           currentSlide={selectedSlide}
           generationMode={isSmartPresentation ? "smart" : "standard"}
-        />
-        <div className="flex flex-1 min-h-0 gap-3 overflow-hidden xl:gap-5 2xl:gap-6">
-          <div className="sticky top-0 hidden h-full w-[165px] shrink-0 self-start md:block">
+        />}
+        <div className={`relative flex flex-1 min-h-0 gap-3 overflow-hidden xl:gap-5 2xl:gap-6${hosted && !hostedPreview ? " pr-[90px]" : ""}`}>
+          <div className={hosted ? "sticky top-0 h-full w-[165px] shrink-0 self-start" : "sticky top-0 hidden h-full w-[165px] shrink-0 self-start md:block"}>
             <SidePanel
               selectedSlide={selectedSlide}
               onSlideClick={handleEditorSlideNavigation}
@@ -954,7 +977,12 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
               </div>
             )}
           </div>
-          <button
+          {hosted && !hostedPreview && <div ref={hostedToolsRef} className="absolute inset-y-0 right-0 z-30 bg-white shadow-md" style={{ width: isRightPanelOpen ? "min(383px, 90%)" : 90 }}>
+            <PresentationActions hideAssistant presentationId={presentation_id} presentationType="standard" variant="template-v2"
+              currentSlide={selectedSlide} presentationData={presentationData} editingDisabled={editingDisabled}
+              onPresentationChanged={handlePresentationChanged} panelOpen={isRightPanelOpen} onPanelOpenChange={setIsRightPanelOpen} />
+          </div>}
+          {!hosted && <><button
             ref={mobileAssistantTriggerRef}
             type="button"
             aria-controls="presentation-mobile-assistant"
@@ -1039,7 +1067,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
                 onPanelOpenChange={setIsRightPanelOpen}
               />
             </div>
-          </div>
+          </div></>}
         </div>
       </div>
     </div>

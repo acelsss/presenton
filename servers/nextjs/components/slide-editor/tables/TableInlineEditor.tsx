@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { tableTracks, trackOffset } from "./table-grid";
 import type {
   TableCellSelection,
   TableSlideElement,
@@ -69,10 +70,12 @@ export function TableInlineEditor({
   );
   const tableWidth = box.w * scale;
   const tableHeight = box.h * scale;
-  const cellWidth = tableWidth / columnCount;
-  const cellHeight = tableHeight / rowCount;
-  const cellLeft = box.x * scale + colIndex * cellWidth;
-  const cellTop = box.y * scale + rowIndex * cellHeight;
+  const widths = tableTracks(element.column_widths, columnCount, tableWidth);
+  const heights = tableTracks(element.row_heights, rowCount, tableHeight);
+  const cellWidth = widths[colIndex];
+  const cellHeight = heights[rowIndex];
+  const cellLeft = box.x * scale + trackOffset(widths, colIndex);
+  const cellTop = box.y * scale + trackOffset(heights, rowIndex);
   const paddingX = Math.max(4, 0.08 * scale);
   const paddingY = Math.max(3, 0.04 * scale);
   const textElement: TextSlideElement = {

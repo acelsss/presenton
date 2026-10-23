@@ -19,6 +19,8 @@ from collections.abc import Callable
 from importlib import import_module
 from typing import Any, Optional, TypeVar
 
+from services.agent_tools.config import external_agent_mode
+
 LOGGER = logging.getLogger(__name__)
 
 _memory_init_lock = threading.Lock()
@@ -46,6 +48,13 @@ def _to_bool(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def mem0_enabled() -> bool:
+    """External agents own conversation memory; manuscript persistence is separate."""
+    return not external_agent_mode() and _to_bool(
+        os.getenv("MEM0_ENABLED"), default=True
+    )
 
 
 def _to_int(value: Optional[str], default: int) -> int:
@@ -168,7 +177,7 @@ def get_shared_mem0_client() -> Any | None:
     """Return the process-wide mem0 client, or ``None`` if disabled or init failed."""
     global _shared_client, _init_attempted
 
-    if not _to_bool(os.getenv("MEM0_ENABLED"), default=True):
+    if not mem0_enabled():
         return None
     if _shared_client is not None:
         return _shared_client

@@ -41,6 +41,7 @@ import {
 } from "../../_shared/blank-slide";
 import NewSlide from "./NewSlide";
 import { MAX_NUMBER_OF_SLIDES } from "@/utils/presentationLimits";
+import { isEditorReadOnly } from "../utils/editorCoordination";
 
 interface SlideActionBarProps {
   slide: any;
@@ -72,8 +73,10 @@ const SlideActionBar = ({
   const [showNewSlideSelection, setShowNewSlideSelection] = useState(false);
   const [isSpeakerPopoverOpen, setIsSpeakerPopoverOpen] = useState(false);
   const [isSlideMenuOpen, setIsSlideMenuOpen] = useState(false);
-  const isStreaming = useSelector(
-    (state: RootState) => state.presentationGeneration.isStreaming
+  const editingDisabled = useSelector(
+    (state: RootState) => isEditorReadOnly(
+      state.presentationGeneration.presentationData, state.presentationGeneration.isStreaming
+    )
   );
   const slideCount = useSelector((state: RootState) => {
     const currentSlides = state.presentationGeneration.presentationData?.slides;
@@ -104,7 +107,7 @@ const SlideActionBar = ({
   const keepVisible =
     showNewSlideSelection || isSpeakerPopoverOpen || isSlideMenuOpen;
 
-  if (!slide || !hasPresentation || slideCount === 0 || isStreaming) {
+  if (!slide || !hasPresentation || slideCount === 0 || editingDisabled) {
     return null;
   }
 
@@ -328,7 +331,7 @@ const SlideActionBar = ({
                   hasReachedSlideLimit && "cursor-not-allowed opacity-50"
                 )}
               >
-                <span>Blank</span>
+                <span>空白页</span>
                 <Plus className="h-4 w-4" strokeWidth={2.4} />
               </button>
 
@@ -344,7 +347,7 @@ const SlideActionBar = ({
                       hasReachedSlideLimit && "cursor-not-allowed opacity-50"
                     )}
                   >
-                    <span>Use Template</span>
+                    <span>使用模板</span>
                     <Plus className="h-4 w-4" strokeWidth={2.4} />
                   </button>
                 </>
@@ -360,7 +363,7 @@ const SlideActionBar = ({
               <PopoverTrigger asChild>
                 <button
                   type="button"
-                  aria-label="Speaker notes"
+                  aria-label="演讲者备注"
                   className={cn(
                     "flex h-8 w-10 shrink-0 items-center justify-center rounded-[6px] text-[#050505] transition-colors hover:bg-[#F7F6F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5141e5]",
                     isSpeakerPopoverOpen && "bg-[#F7F6F9]"
@@ -381,12 +384,12 @@ const SlideActionBar = ({
               >
                 <div className="border-b border-[#EDEEEF] px-5 py-4">
                   <p className="text-sm font-semibold text-[#191919]">
-                    Speaker notes
+                    演讲者备注
                   </p>
                 </div>
                 <div className="p-5">
                   <div className="max-h-[240px] min-h-[108px] overflow-auto whitespace-pre-wrap rounded-[12px] border border-[#EDEEEF] bg-[#FAFAFB] p-4 text-sm leading-relaxed text-[#333333]">
-                    {speakerNote || "No speaker notes for this slide."}
+                    {speakerNote || "本页暂无演讲者备注。"}
                   </div>
                 </div>
               </PopoverContent>
@@ -401,7 +404,7 @@ const SlideActionBar = ({
             <DropdownMenu.Trigger asChild>
               <button
                 type="button"
-                aria-label="Slide actions"
+                aria-label="幻灯片操作"
                 className={cn(
                   "flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] text-[#050505] transition-colors hover:bg-[#F7F6F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5141e5]",
                   isSlideMenuOpen && "bg-[#F7F6F9]"
@@ -423,7 +426,7 @@ const SlideActionBar = ({
                   onSelect={handleDuplicateSlide}
                 >
                   <Copy className="h-4 w-4 shrink-0 text-current" />
-                  <span>Duplicate Slide</span>
+                  <span>复制幻灯片</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
                   disabled={currentIndex <= 0}
@@ -431,7 +434,7 @@ const SlideActionBar = ({
                   onSelect={() => handleMoveSlide(currentIndex - 1)}
                 >
                   <ArrowUp className="h-4 w-4 shrink-0 text-current" />
-                  <span>Move Up</span>
+                  <span>上移</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
                   disabled={currentIndex >= slideCount - 1}
@@ -439,7 +442,7 @@ const SlideActionBar = ({
                   onSelect={() => handleMoveSlide(currentIndex + 1)}
                 >
                   <ArrowDown className="h-4 w-4 shrink-0 text-current" />
-                  <span>Move Down</span>
+                  <span>下移</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Separator className="my-2 h-px bg-[#EDEEEF]" />
                 <DropdownMenu.Item
@@ -447,7 +450,7 @@ const SlideActionBar = ({
                   onSelect={handleDeleteSlide}
                 >
                   <Trash2 className="h-4 w-4 shrink-0 text-current" />
-                  <span>Delete Slide</span>
+                  <span>删除幻灯片</span>
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Portal>

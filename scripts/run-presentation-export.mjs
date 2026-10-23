@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTask } from "@presenton/export-core";
+import { renderSnapshot } from "./snapshot-export.mjs";
+import { snapshotInput } from "./snapshot-input.mjs";
 
 function parseCookieHeader(cookieHeader) {
   if (!cookieHeader) return undefined;
@@ -93,10 +95,13 @@ async function main() {
     ...task
   } = rawTask;
   task.__taskFilePath = path.resolve(taskPath);
+  const input = task.type === "snapshot-export" && task.snapshotPath
+    ? await snapshotInput(task, path.dirname(path.dirname(task.snapshotPath))) : null;
+  if (input) task.snapshot = input.snapshot;
 
-  const response = await runTask(
+  const response = await (task.type === "snapshot-export" ? renderSnapshot : runTask)(
     task,
-    buildRunOptions(task, { fastapiUrl, cookieHeader }),
+    {...buildRunOptions(task, { fastapiUrl, cookieHeader }), ...(input ? {assets: input.assets} : {})},
   );
   const responsePath = taskPath.replace(/\.json$/i, ".response.json");
   await fs.writeFile(responsePath, JSON.stringify(normalizeResponse(response)), "utf8");

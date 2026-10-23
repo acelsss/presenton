@@ -1,0 +1,46 @@
+{
+  "id": "graphite-composition",
+  "version": "1.0.0",
+  "templateId": "graphite-technical",
+  "renderer": "native-blocks-v1",
+  "sourceLibrary": "graphite-elements@1.0.0",
+  "supportedBlocks": [
+    "H01",
+    "E01",
+    "E02",
+    "E04",
+    "C01",
+    "V01",
+    "V04",
+    "S01",
+    "S03",
+    "L01",
+    "L03",
+    "L04",
+    "A02",
+    "P01",
+    "P02",
+    "A03",
+    "R01",
+    "D01",
+    "M01",
+    "T01",
+    "X01",
+    "X02"
+  ],
+  "semanticContract": "LLM maps source fields to the native adapter; not automatic semantic verification",
+  "sourceHashes": {
+    "tokens.json": "812d71012ba50aacfa34e536ba022c0fd769495205c9ced5d3c91158a827d3d4",
+    "elements.json": "344285b549b25dc694f9bceee84d986b25ccd92142ad90b192d2877eded7b425",
+    "provenance.json": "70f79e265f041a527be9a3240dcbe448f6d3b10281fb64e087c86ee2a14253ce"
+  },
+  "limits": {
+    "maxDepth": 3,
+    "maxBlocks": 24,
+    "maxItems": 16,
+    "pixelCoordinates": false,
+    "connectorAutoFollow": false,
+    "nativeOfficeTable": false,
+    "nativeOfficeChart": false
+  }
+}

@@ -87,9 +87,12 @@ class ChatTools:
         self,
         memory: PresentationContextStore,
         mode: ChatToolMode = "presentation",
+        *,
+        strict_indices: bool = False,
     ):
         self._memory = memory
         self._mode = mode
+        self._strict_indices = strict_indices
         self._turn_user_message = ""
         self._generated_assets: list[dict[str, Any]] = []
         self._tool_handlers: dict[str, ToolHandler] = {
@@ -468,6 +471,22 @@ class ChatTools:
             ),
         ]
 
+    async def execute_validated(
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Execute once using the published native schema; caller owns rollback.
+
+        External callers must enforce their own capability allowlist before entry.
+        No argument repair or post-execution retry is performed here.
+        """
+        definition = next(
+            (tool for tool in self.get_tool_definitions() if tool.name == name), None
+        )
+        if definition is None or name not in self._tool_handlers:
+            raise ValueError("Unsupported native tool")
+        payload = definition.input_schema.model_validate(arguments)
+        return await self._tool_handlers[name](payload.model_dump(by_alias=True))
+
     async def execute_tool_call(self, tool_call: AssistantToolCall) -> dict[str, Any]:
         handler = self._tool_handlers.get(tool_call.name)
         if not handler:
@@ -611,7 +630,7 @@ class ChatTools:
             payload.index,
             include_full_content=payload.include_full_content,
         )
-        if not slide and payload.index > 0:
+        if not slide and payload.index > 0 and not self._strict_indices:
             # Users often refer to slides as 1-based; allow a safe fallback.
             fallback_index = payload.index - 1
             fallback_slide = await self._memory.get_slide_at_index(

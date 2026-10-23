@@ -213,22 +213,24 @@ export class PresentationGenerationApi {
     }
   }
 
-  static async updatePresentationSlide(slide: Slide) {
+  static async updatePresentationSlide(slide: Slide, expectedPageRevision?: number) {
     try {
       const response = await fetch(
         getApiUrl(`/api/v1/ppt/presentation/slide_update`),
         {
           method: "PATCH",
           headers: getHeader(),
-          body: JSON.stringify({ slide }),
+          body: JSON.stringify({ slide, expectedPageRevision }),
           cache: "no-cache",
         }
       );
 
-      return await ApiResponseHandler.handleResponse(
+      const result = await ApiResponseHandler.handleResponse(
         response,
         "Failed to update slide"
       );
+      const coordination = response.headers.get("X-Presenton-Coordination");
+      return coordination ? { ...result, coordination: JSON.parse(coordination) } : result;
     } catch (error) {
       console.error("error in presentation slide update", error);
       throw error;

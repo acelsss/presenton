@@ -29,7 +29,8 @@ async def fail_interrupted_async_tasks(session: AsyncSession) -> int:
     """
     result = await session.execute(
         select(AsyncTaskModel).where(
-            AsyncTaskModel.status == AsyncTaskStatus.PENDING
+            AsyncTaskModel.status == AsyncTaskStatus.PENDING,
+            AsyncTaskModel.type != "ppt_workflow",
         )
     )
     interrupted_tasks = list(result.scalars().all())
