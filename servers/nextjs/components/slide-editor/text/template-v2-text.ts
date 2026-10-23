@@ -997,6 +997,16 @@ export function layoutTextListRenderItems(
   return { tokens, contentHeight };
 }
 
+const TEXT_BREAK_AFTER = "、，。；：！？";
+const TEXT_LAYOUT_PART = new RegExp(
+  `\\n|[^\\S\\n]+|[^\\s${TEXT_BREAK_AFTER}]+[${TEXT_BREAK_AFTER}]?|[${TEXT_BREAK_AFTER}]`,
+  "gu",
+);
+
+export function splitTextForLayout(text: string) {
+  return text.match(TEXT_LAYOUT_PART) ?? [text];
+}
+
 export function layoutRenderTextRuns(
   runs: RenderTextRun[],
   width: number,
@@ -1031,7 +1041,7 @@ export function layoutRenderTextRuns(
       if (displayMode) pushLine();
       continue;
     }
-    const parts = run.text.match(/\n|[^\S\n]+|[^\s]+/g) ?? [run.text];
+    const parts = splitTextForLayout(run.text);
     for (const part of parts) {
       if (part === "\n") {
         pushLine();
